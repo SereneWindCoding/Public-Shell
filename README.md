@@ -9,3 +9,10 @@ bash <(curl -Ls https://git.io/JoRXU)
 ``` bash
 bash <(curl -Ls https://git.io/JoRrf)
 ```
+
+---
+
+## Docker安装脚本
+``` bash
+https://git.io/JKtG8
+```
