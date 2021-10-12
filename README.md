@@ -14,5 +14,5 @@ bash <(curl -Ls https://git.io/JoRrf)
 
 ## Docker安装脚本
 ``` bash
-https://git.io/JKtG8
+bash <(curl -Ls https://git.io/JKtG8)
 ```
