@@ -2,7 +2,7 @@
 
 printf "\n\n###########################################\n时间同步脚本\n###########################################\n\n"
 
-wget -P /etc/cuocuo/ -N --no-check-certificate https://raw.githubusercontent.com/SereneWindCoding/Public-Shell/main/synctime.sh
+wget -P /etc/cuocuo/ -N --no-check-certificate https://cdn.jsdelivr.net/gh/SereneWindCoding/Public-Shell@main/synctime.sh
 
 printf "\n\n###########################################\n设置Crontab命令\n###########################################\n\n"
 
