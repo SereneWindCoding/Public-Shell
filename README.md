@@ -16,3 +16,10 @@ bash <(curl -Ls https://git.io/JoRrf)
 ``` bash
 bash <(curl -Ls https://git.io/JKtG8)
 ```
+
+---
+
+## 国内机器优化
+``` bash
+bash <(curl -Ls https://cdn.jsdelivr.net/gh/SereneWindCoding/Public-Shell@main/cnoptimize.sh)
+```
