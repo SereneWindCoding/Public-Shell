@@ -18,7 +18,6 @@ apt-get install -y wget net-tools iperf3 curl nano sudo screen dnsutils nload ht
 
 printf "\n\n###########################################\n系统优化\n###########################################\n\n"
 
-modprobe ip_conntrack
 wget -N --no-check-certificate https://cdn.jsdelivr.net/gh/SereneWindCoding/Public-Shell@main/optimize.sh
 chmod +x optimize.sh
 bash optimize.sh
