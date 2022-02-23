@@ -8,5 +8,5 @@ dd=`date +%d`
 log_path="/etc/soga/access_log"
 
 if  [ -d "${log_path}" ]; then
-find "${log_path}"/* -not -name "access_log_${yy}_${mm}_${dd}.csv" | xargs rm -rf
+/usr/bin/find "${log_path}"/* -not -name "access_log_${yy}_${mm}_${dd}.csv" | xargs rm -rf
 fi
