@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-wget -N --no-check-certificate -O /home/cleanlog/cleanlog.sh https://rawgithubusercontent.ninjacloudnetworks.workers.dev/SereneWindCoding/Public-Shell/main/cleanlog/cleanlog.sh
+wget -N --no-check-certificate https://rawgithubusercontent.ninjacloudnetworks.workers.dev/SereneWindCoding/Public-Shell/main/cleanlog/cleanlog.sh -P /home/cleanlog/
 chmod +x /home/cleanlog/cleanlog.sh
 
 cat >> /var/spool/cron/crontabs/root <<EOF
