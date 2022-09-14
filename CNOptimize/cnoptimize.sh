@@ -2,6 +2,7 @@
 
 printf "\n\n###########################################\n更换系统DNS\n###########################################\n\n"
 
+mv /etc/resolv.conf /etc/resolv.conf.link
 chattr -i /etc/resolv.conf
 echo "nameserver 223.5.5.5" > /etc/resolv.conf
 echo "nameserver 223.6.6.6" >> /etc/resolv.conf
