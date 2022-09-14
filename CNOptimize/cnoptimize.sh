@@ -18,6 +18,4 @@ apt-get install -y wget net-tools iperf3 curl nano sudo screen dnsutils nload ht
 
 printf "\n\n###########################################\n系统优化\n###########################################\n\n"
 
-wget -N --no-check-certificate https://rawgithubusercontent.ninjacloudnetworks.workers.dev/SereneWindCoding/Public-Shell/main/optimize.sh
-chmod +x optimize.sh
-bash optimize.sh
+bash <(curl -L https://cdn.jsdelivr.net/gh/SereneWindCoding/Public-Shell@main/CNOptimize/optimize.sh)
