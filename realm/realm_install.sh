@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-wget https://github.com/zephyrchien/realm/releases/download/v2.1.0/realm-aarch64-unknown-linux-musl.tar.gz
+wget https://github.com/zhboner/realm/releases/download/v2.4.3/realm-x86_64-unknown-linux-musl.tar.gz
 
 tar -xvzf realm-aarch64-unknown-linux-musl.tar.gz
 rm -f realm-x86_64-unknown-linux-musl.tar.gz
