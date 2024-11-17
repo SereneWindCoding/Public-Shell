@@ -129,15 +129,15 @@ install_requirements() {
 
 # 配置DNS - 根据区域选择不同的DNS服务器
 configure_dns() {
-    OUT_INFO "[信息] 配置系统DNS..."
-    
+    OUT_INFO "配置系统DNS..."
+
     read -p "是否使用国内DNS？(y/n): " use_cn_dns
-    
+
     # 确保备份目录存在
     BACKUP_DIR="/root/system_backup"
     if [[ ! -d "${BACKUP_DIR}" ]]; then
         mkdir -p "${BACKUP_DIR}" || {
-            OUT_ERROR "[错误] 无法创建备份目录：${BACKUP_DIR}"
+            OUT_ERROR "无法创建备份目录：${BACKUP_DIR}"
             exit 1
         }
     fi
@@ -148,7 +148,7 @@ configure_dns() {
     elif [[ -f /etc/resolv.conf ]]; then
         chattr -i /etc/resolv.conf 2>/dev/null || true
         mv /etc/resolv.conf "${BACKUP_DIR}/resolv.conf.bak" || {
-            OUT_ERROR "[错误] 无法备份 /etc/resolv.conf 文件"
+            OUT_ERROR "无法备份 /etc/resolv.conf 文件"
             exit 1
         }
     fi
@@ -163,7 +163,7 @@ nameserver 223.6.6.6
 nameserver 119.29.29.29
 nameserver 180.76.76.76
 EOF
-        OUT_INFO "[信息] 已配置国内DNS"
+        OUT_INFO "已配置国内DNS"
     else
         # 国外DNS配置
         cat > /etc/resolv.conf << EOF
@@ -173,16 +173,67 @@ nameserver 8.8.8.8
 nameserver 9.9.9.9
 nameserver 208.67.222.222
 EOF
-        OUT_INFO "[信息] 已配置国际DNS"
+        OUT_INFO "已配置国际DNS"
     fi
 
     # 设置文件为不可修改
     chattr +i /etc/resolv.conf || {
-        OUT_ERROR "[错误] 无法设置 /etc/resolv.conf 为只读"
+        OUT_ERROR "无法设置 /etc/resolv.conf 为只读"
         exit 1
     }
 
-    OUT_SUCCESS "[成功] DNS配置完成"
+    OUT_SUCCESS "DNS配置完成"
+}
+
+# 配置NTP - 根据区域选择不同的NTP服务器
+configure_ntp() {
+    OUT_INFO "配置NTP时间同步..."
+
+    read -p "是否使用国内NTP服务器？(y/n): " use_cn_ntp
+
+    # 检测并启用正确的 NTP 服务
+    if systemctl show -p FragmentPath chronyd.service >/dev/null 2>&1; then
+        NTP_SERVICE="chronyd.service"
+    else
+        NTP_SERVICE="chrony.service"
+    fi
+
+    if [[ "${use_cn_ntp}" =~ ^[Yy]$ ]]; then
+        # 国内NTP配置
+        cat > /etc/chrony.conf << EOF
+server ntp.aliyun.com iburst
+server cn.ntp.org.cn iburst
+server ntp.tencent.com iburst
+driftfile /var/lib/chrony/drift
+makestep 1.0 3
+rtcsync
+logdir /var/log/chrony
+EOF
+        OUT_INFO "已配置国内NTP服务器"
+    else
+        # 国外NTP配置
+        cat > /etc/chrony.conf << EOF
+pool pool.ntp.org iburst
+pool time.google.com iburst
+pool time.cloudflare.com iburst
+driftfile /var/lib/chrony/drift
+makestep 1.0 3
+rtcsync
+logdir /var/log/chrony
+EOF
+        OUT_INFO "已配置国际NTP服务器"
+    fi
+
+    systemctl enable "${NTP_SERVICE}" || {
+        OUT_ERROR "无法启用 NTP 服务：${NTP_SERVICE}"
+        exit 1
+    }
+    systemctl restart "${NTP_SERVICE}" || {
+        OUT_ERROR "无法重启 NTP 服务：${NTP_SERVICE}"
+        exit 1
+    }
+
+    OUT_SUCCESS "NTP配置完成"
 }
 
 # 检查网卡特性和兼容性
