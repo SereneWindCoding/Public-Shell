@@ -51,33 +51,24 @@ check_requirements() {
         fi
     done
     
-    # 根据不同系统安装缺失工具
-    if [ ${#missing_tools[@]} -ne 0 ]; then
-        echo -e "${YELLOW}正在安装缺失的工具: ${missing_tools[*]}${NC}"
-        case $SYSTEM in
-            "debian"|"ubuntu")
-                apt-get update >/dev/null 2>&1
-                apt-get install -y ${missing_tools[*]}
-                ;;
-            "rhel"|"fedora")
-                yum -y install epel-release >/dev/null 2>&1
-                yum -y install ${missing_tools[*]}
-                ;;
-            "arch")
-                pacman -Sy --noconfirm ${missing_tools[*]}
-                ;;
-        esac
-    fi
-    
-    # 安装持久化工具
+    # 根据不同系统安装缺失工具和持久化包
     case $SYSTEM in
         "debian"|"ubuntu")
-            if ! dpkg -l | grep -q "iptables-persistent|netfilter-persistent"; then
+            apt-get update >/dev/null 2>&1
+            if [ ${#missing_tools[@]} -ne 0 ]; then
+                apt-get install -y ${missing_tools[*]}
+            fi
+            # 安装持久化包
+            if ! dpkg -l | grep -q "iptables-persistent"; then
                 echo -e "${YELLOW}正在安装 iptables-persistent...${NC}"
                 DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent
             fi
             ;;
         "rhel"|"fedora")
+            if [ ${#missing_tools[@]} -ne 0 ]; then
+                yum -y install ${missing_tools[*]}
+            fi
+            # 安装持久化包
             if ! rpm -q iptables-services >/dev/null 2>&1; then
                 echo -e "${YELLOW}正在安装 iptables-services...${NC}"
                 yum -y install iptables-services
@@ -86,71 +77,30 @@ check_requirements() {
             fi
             ;;
         "arch")
+            if [ ${#missing_tools[@]} -ne 0 ]; then
+                pacman -Sy --noconfirm ${missing_tools[*]}
+            fi
             if ! pacman -Qs iptables >/dev/null 2>&1; then
                 echo -e "${YELLOW}正在安装 iptables...${NC}"
                 pacman -Sy --noconfirm iptables
-                systemctl enable iptables ip6tables
-                systemctl start iptables ip6tables
             fi
             ;;
     esac
 }
 
-# 设置防火墙持久化
-setup_persistence() {
-    case $SYSTEM in
-        "rhel"|"fedora")
-            service iptables save
-            service ip6tables save
-            ;;
-        "debian"|"ubuntu")
-            mkdir -p /etc/iptables
-            iptables-save > /etc/iptables/rules.v4
-            ip6tables-save > /etc/iptables/rules.v6
-            ;;
-        "arch")
-            mkdir -p /etc/iptables
-            iptables-save > /etc/iptables/iptables.rules
-            ip6tables-save > /etc/iptables/ip6tables.rules
-            ;;
-        *)
-            mkdir -p /etc/iptables
-            iptables-save > /etc/iptables/rules.v4
-            ip6tables-save > /etc/iptables/rules.v6
-            # 创建通用的启动脚本
-            create_generic_startup_script
-            ;;
-    esac
-}
-
-# 为通用系统创建启动脚本
-create_generic_startup_script() {
-    cat > /etc/network/if-pre-up.d/iptables << 'EOF'
-#!/bin/sh
-/sbin/iptables-restore < /etc/iptables/rules.v4
-/sbin/ip6tables-restore < /etc/iptables/rules.v6
-EOF
-    chmod +x /etc/network/if-pre-up.d/iptables
-}
-
 # 下载Cloudflare IP列表
 download_cf_ips() {
     local type=$1
-    local url=""
     local tmp_file=""
     
     if [ "$type" = "v4" ]; then
-        url="https://raw.githubusercontent.com/SereneWindCoding/Cloudflare-IP/main/V4/index.html"
         tmp_file="/tmp/cf_ipv4.txt"
+        echo -e "${YELLOW}正在下载 Cloudflare IPv4 列表...${NC}"
+        curl -s https://www.cloudflare.com/ips-v4 -o "$tmp_file"
     else
-        url="https://raw.githubusercontent.com/SereneWindCoding/Cloudflare-IP/main/V6/index.html"
         tmp_file="/tmp/cf_ipv6.txt"
-    fi
-    
-    echo -e "${YELLOW}正在下载 Cloudflare $type IP 列表...${NC}"
-    if ! curl -s "$url" -o "$tmp_file"; then
-        echo -e "${RED}下载 Cloudflare $type IP 列表失败${NC}"
-        exit 1
+        echo -e "${YELLOW}正在下载 Cloudflare IPv6 列表...${NC}"
+        curl -s https://www.cloudflare.com/ips-v6 -o "$tmp_file"
     fi
     
     if [ ! -s "$tmp_file" ]; then
@@ -225,6 +175,120 @@ configure_firewall() {
     ip6tables -A INPUT -p tcp -m multiport --dports 80,443 -j DROP
 }
 
+# 确保规则持久化
+ensure_persistence() {
+    echo -e "${YELLOW}正在确保规则持久化...${NC}"
+    
+    case $SYSTEM in
+        "debian")
+            # Debian 使用 netfilter-persistent
+            mkdir -p /etc/iptables
+            iptables-save > /etc/iptables/rules.v4
+            ip6tables-save > /etc/iptables/rules.v6
+            
+            # 启用 netfilter-persistent 服务
+            systemctl enable netfilter-persistent
+            systemctl restart netfilter-persistent
+            ;;
+            
+        "ubuntu")
+            # Ubuntu 使用 iptables-persistent
+            mkdir -p /etc/iptables
+            iptables-save > /etc/iptables/rules.v4
+            ip6tables-save > /etc/iptables/rules.v6
+            
+            # 启用 iptables-persistent 服务
+            systemctl enable iptables-persistent
+            systemctl restart iptables-persistent
+            ;;
+            
+        "rhel"|"fedora")
+            # RHEL/CentOS 使用 iptables-services
+            service iptables save
+            service ip6tables save
+            
+            systemctl enable iptables
+            systemctl enable ip6tables
+            systemctl restart iptables
+            systemctl restart ip6tables
+            ;;
+            
+        *)
+            # 通用系统采用启动脚本方案
+            mkdir -p /etc/iptables
+            iptables-save > /etc/iptables/rules.v4
+            ip6tables-save > /etc/iptables/rules.v6
+            
+            # 创建通用启动脚本
+            mkdir -p /etc/network/if-pre-up.d/
+            cat > /etc/network/if-pre-up.d/iptables << 'EOF'
+#!/bin/sh
+/sbin/iptables-restore < /etc/iptables/rules.v4
+/sbin/ip6tables-restore < /etc/iptables/rules.v6
+EOF
+            chmod +x /etc/network/if-pre-up.d/iptables
+            ;;
+    esac
+    
+    # 添加双重保险（对所有系统）
+    mkdir -p /etc/network/if-pre-up.d/
+    cat > /etc/network/if-pre-up.d/iptables << 'EOF'
+#!/bin/sh
+if [ -f /etc/iptables/rules.v4 ]; then
+    /sbin/iptables-restore < /etc/iptables/rules.v4
+fi
+if [ -f /etc/iptables/rules.v6 ]; then
+    /sbin/ip6tables-restore < /etc/iptables/rules.v6
+fi
+EOF
+    chmod +x /etc/network/if-pre-up.d/iptables
+}
+
+# 验证规则
+verify_rules() {
+    echo -e "${YELLOW}验证防火墙规则配置...${NC}"
+    
+    case $SYSTEM in
+        "debian")
+            if systemctl is-active netfilter-persistent >/dev/null 2>&1; then
+                echo -e "${GREEN}netfilter-persistent 服务运行中${NC}"
+            else
+                echo -e "${RED}netfilter-persistent 服务未运行${NC}"
+                return 1
+            fi
+            ;;
+        "ubuntu")
+            if systemctl is-active iptables-persistent >/dev/null 2>&1; then
+                echo -e "${GREEN}iptables-persistent 服务运行中${NC}"
+            else
+                echo -e "${RED}iptables-persistent 服务未运行${NC}"
+                return 1
+            fi
+            ;;
+        "rhel"|"fedora")
+            if systemctl is-active iptables >/dev/null 2>&1; then
+                echo -e "${GREEN}iptables 服务运行中${NC}"
+            else
+                echo -e "${RED}iptables 服务未运行${NC}"
+                return 1
+            fi
+            ;;
+    esac
+    
+    # 检查规则文件
+    if [ -f /etc/iptables/rules.v4 ] && [ -f /etc/iptables/rules.v6 ]; then
+        echo -e "${GREEN}规则文件已保存${NC}"
+        # 显示当前规则
+        echo -e "${GREEN}当前IPv4规则：${NC}"
+        iptables -L INPUT -n -v | grep -E "80|443"
+        echo -e "${GREEN}当前IPv6规则：${NC}"
+        ip6tables -L INPUT -n -v | grep -E "80|443"
+    else
+        echo -e "${RED}规则文件未找到${NC}"
+        return 1
+    fi
+}
+
 # 清理临时文件
 cleanup() {
     rm -f /tmp/cf_ipv4.txt /tmp/cf_ipv6.txt
@@ -244,20 +308,18 @@ main() {
     # 配置防火墙
     configure_firewall
     
-    # 持久化配置
-    setup_persistence
+    # 确保持久化
+    ensure_persistence
+    
+    # 验证配置
+    verify_rules
     
     # 清理
     cleanup
     
     echo -e "${GREEN}Cloudflare IP 防护配置完成！${NC}"
     echo -e "${YELLOW}规则备份保存在 /etc/iptables/backup/ 目录下${NC}"
-    
-    # 显示当前规则统计
-    echo -e "${GREEN}当前 IPv4 规则统计：${NC}"
-    iptables -L INPUT -v -n | grep -E "80|443"
-    echo -e "${GREEN}当前 IPv6 规则统计：${NC}"
-    ip6tables -L INPUT -v -n | grep -E "80|443"
+    echo -e "${GREEN}请重启系统以验证规则是否正确持久化${NC}"
 }
 
 main
