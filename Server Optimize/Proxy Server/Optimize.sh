@@ -133,16 +133,32 @@ configure_dns() {
     
     read -p "是否使用国内DNS？(y/n): " use_cn_dns
     
+    # 确保备份目录存在
+    BACKUP_DIR="/root/system_backup"
+    if [[ ! -d "${BACKUP_DIR}" ]]; then
+        mkdir -p "${BACKUP_DIR}" || {
+            OUT_ERROR "[错误] 无法创建备份目录：${BACKUP_DIR}"
+            exit 1
+        }
+    fi
+
+    # 移除 /etc/resolv.conf 的符号链接
     if [[ -L /etc/resolv.conf ]]; then
         rm -f /etc/resolv.conf
     fi
-    
+
+    # 备份现有的 /etc/resolv.conf 文件
     if [[ -f /etc/resolv.conf ]]; then
-        mv /etc/resolv.conf "${BACKUP_DIR}/resolv.conf.bak"
+        mv /etc/resolv.conf "${BACKUP_DIR}/resolv.conf.bak" || {
+            OUT_ERROR "[错误] 无法备份 /etc/resolv.conf 文件"
+            exit 1
+        }
     fi
-    
+
+    # 移除可能存在的不可修改属性
     chattr -i /etc/resolv.conf 2>/dev/null || true
-    
+
+    # 根据选择写入 DNS 配置
     if [[ "${use_cn_dns}" =~ ^[Yy]$ ]]; then
         # 国内DNS配置
         cat > /etc/resolv.conf << EOF
@@ -164,8 +180,13 @@ nameserver 208.67.222.222
 EOF
         OUT_INFO "[信息] 已配置国际DNS"
     fi
-    
-    chattr +i /etc/resolv.conf
+
+    # 设置文件为不可修改
+    chattr +i /etc/resolv.conf || {
+        OUT_ERROR "[错误] 无法设置 /etc/resolv.conf 为只读"
+        exit 1
+    }
+
     OUT_SUCCESS "[成功] DNS配置完成"
 }
 
@@ -174,6 +195,13 @@ configure_ntp() {
     
     read -p "是否使用国内NTP服务器？(y/n): " use_cn_ntp
     
+    # 检测并启用正确的 NTP 服务
+    if systemctl show -p FragmentPath chronyd.service >/dev/null 2>&1; then
+        NTP_SERVICE="chronyd.service"
+    else
+        NTP_SERVICE="chrony.service"
+    fi
+
     if [[ "${use_cn_ntp}" =~ ^[Yy]$ ]]; then
         # 国内NTP配置
         cat > /etc/chrony.conf << EOF
@@ -187,7 +215,7 @@ logdir /var/log/chrony
 EOF
         OUT_INFO "[信息] 已配置国内NTP服务器"
     else
-        # 国际NTP配置
+        # 国外NTP配置
         cat > /etc/chrony.conf << EOF
 pool pool.ntp.org iburst
 pool time.google.com iburst
@@ -200,14 +228,14 @@ EOF
         OUT_INFO "[信息] 已配置国际NTP服务器"
     fi
 
-    # 修复: 使用正确的主服务名称操作
-    CHRONY_SERVICE=$(systemctl show -p FragmentPath chronyd.service 2>/dev/null | awk -F'=' '/FragmentPath/ {print $2}')
-    if [[ -z "${CHRONY_SERVICE}" ]]; then
-        CHRONY_SERVICE="chrony.service"
-    fi
-
-    systemctl enable "${CHRONY_SERVICE}" || OUT_ERROR "[错误] 启用服务失败，请检查服务名称：${CHRONY_SERVICE}"
-    systemctl restart "${CHRONY_SERVICE}" || OUT_ERROR "[错误] 重启服务失败，请检查服务配置"
+    systemctl enable "${NTP_SERVICE}" || {
+        OUT_ERROR "[错误] 无法启用 NTP 服务：${NTP_SERVICE}"
+        exit 1
+    }
+    systemctl restart "${NTP_SERVICE}" || {
+        OUT_ERROR "[错误] 无法重启 NTP 服务：${NTP_SERVICE}"
+        exit 1
+    }
 
     OUT_SUCCESS "[成功] NTP配置完成"
 }
