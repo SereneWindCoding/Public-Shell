@@ -41,12 +41,6 @@ check_root() {
     fi
 }
 
-# 创建备份目录
-create_backup_dir() {
-    mkdir -p "$BACKUP_DIR"
-    OUT_INFO "[信息] 创建备份目录: $BACKUP_DIR"
-}
-
 # 检测系统类型
 check_system() {
     if [[ -f /etc/redhat-release ]]; then
@@ -69,24 +63,75 @@ check_system() {
     fi
 }
 
+# 检查虚拟化环境
+check_virtualization() {
+    OUT_INFO "[信息] 检查虚拟化环境..."
+    
+    is_vm=0
+    virt_type="none"
+    
+    # 检查常见虚拟化标志
+    if systemd-detect-virt &>/dev/null; then
+        virt_type=$(systemd-detect-virt)
+        is_vm=1
+    elif [ -f "/sys/hypervisor/type" ]; then
+        virt_type=$(cat /sys/hypervisor/type)
+        is_vm=1
+    elif dmesg | grep -i "vmware\|kvm\|qemu\|virtio\|xen\|hyper-v" &>/dev/null; then
+        if dmesg | grep -i "vmware" &>/dev/null; then
+            virt_type="vmware"
+        elif dmesg | grep -i "kvm\|qemu\|virtio" &>/dev/null; then
+            virt_type="kvm"
+        elif dmesg | grep -i "xen" &>/dev/null; then
+            virt_type="xen"
+        elif dmesg | grep -i "hyper-v" &>/dev/null; then
+            virt_type="hyper-v"
+        fi
+        is_vm=1
+    fi
+
+    if [ $is_vm -eq 1 ]; then
+        OUT_INFO "[信息] 检测到虚拟化环境: $virt_type"
+    else
+        OUT_INFO "[信息] 检测到物理机环境"
+    fi
+}
+
+# 检查网卡类型
+check_nic_type() {
+    local interface=$1
+    local is_virtio=0
+    
+    # 检查是否为virtio网卡
+    if ethtool -i $interface 2>/dev/null | grep -q "driver: virtio"; then
+        is_virtio=1
+    elif lspci | grep -i "virtio" | grep -i "network" &>/dev/null; then
+        is_virtio=1
+    elif dmesg | grep -i "virtio.*network" | grep $interface &>/dev/null; then
+        is_virtio=1
+    fi
+    
+    echo $is_virtio
+}
+
 # 安装必要工具
 install_requirements() {
     OUT_INFO "[信息] 安装必要工具..."
     if [[ ${release} == "centos" ]]; then
         yum install -y epel-release
-        yum install -y ethtool wget net-tools iperf3 curl nano sudo screen bind-utils \
-            nload htop mtr tcptraceroute jq iftop nethogs sysstat lsof strace chrony
+        yum install -y ethtool wget net-tools curl chrony
     else
         apt-get update
-        apt-get install -y ethtool wget net-tools iperf3 curl nano sudo screen dnsutils \
-            nload htop mtr tcptraceroute jq iftop nethogs sysstat lsof strace chrony
+        apt-get install -y ethtool wget net-tools curl chrony
     fi
     OUT_SUCCESS "[成功] 工具安装完成"
 }
 
-# 配置DNS
+# 配置DNS - 根据区域选择不同的DNS服务器
 configure_dns() {
     OUT_INFO "[信息] 配置系统DNS..."
+    
+    read -p "是否使用国内DNS？(y/n): " use_cn_dns
     
     if [[ -L /etc/resolv.conf ]]; then
         rm -f /etc/resolv.conf
@@ -98,24 +143,53 @@ configure_dns() {
     
     chattr -i /etc/resolv.conf 2>/dev/null || true
     
-    cat > /etc/resolv.conf << EOF
+    if [[ "${use_cn_dns}" =~ ^[Yy]$ ]]; then
+        # 国内DNS配置
+        cat > /etc/resolv.conf << EOF
+options timeout:2 attempts:3 rotate
+nameserver 223.5.5.5
+nameserver 223.6.6.6
+nameserver 119.29.29.29
+nameserver 180.76.76.76
+EOF
+        OUT_INFO "[信息] 已配置国内DNS"
+    else
+        # 国外DNS配置
+        cat > /etc/resolv.conf << EOF
 options timeout:2 attempts:3 rotate
 nameserver 1.1.1.1
 nameserver 8.8.8.8
 nameserver 9.9.9.9
 nameserver 208.67.222.222
 EOF
+        OUT_INFO "[信息] 已配置国际DNS"
+    fi
     
     chattr +i /etc/resolv.conf
     OUT_SUCCESS "[成功] DNS配置完成"
 }
 
-# 配置NTP时间同步
+# 配置NTP - 根据区域选择不同的NTP服务器
 configure_ntp() {
     OUT_INFO "[信息] 配置NTP时间同步..."
     
-    # 配置chrony
-    cat > /etc/chrony.conf << EOF
+    read -p "是否使用国内NTP服务器？(y/n): " use_cn_ntp
+    
+    if [[ "${use_cn_ntp}" =~ ^[Yy]$ ]]; then
+        # 国内NTP配置
+        cat > /etc/chrony.conf << EOF
+server ntp.aliyun.com iburst
+server cn.ntp.org.cn iburst
+server ntp.tencent.com iburst
+driftfile /var/lib/chrony/drift
+makestep 1.0 3
+rtcsync
+logdir /var/log/chrony
+EOF
+        OUT_INFO "[信息] 已配置国内NTP服务器"
+    else
+        # 国际NTP配置
+        cat > /etc/chrony.conf << EOF
 pool pool.ntp.org iburst
 pool time.google.com iburst
 pool time.cloudflare.com iburst
@@ -124,6 +198,8 @@ makestep 1.0 3
 rtcsync
 logdir /var/log/chrony
 EOF
+        OUT_INFO "[信息] 已配置国际NTP服务器"
+    fi
     
     systemctl enable chronyd
     systemctl restart chronyd
