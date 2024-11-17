@@ -191,12 +191,8 @@ configure_ntp() {
 
     read -p "是否使用国内NTP服务器？(y/n): " use_cn_ntp
 
-    # 检测并启用正确的 NTP 服务
-    if systemctl show -p FragmentPath chronyd.service >/dev/null 2>&1; then
-        NTP_SERVICE="chronyd.service"
-    else
-        NTP_SERVICE="chrony.service"
-    fi
+    # 使用真实服务名称 chrony.service
+    NTP_SERVICE="chrony.service"
 
     if [[ "${use_cn_ntp}" =~ ^[Yy]$ ]]; then
         # 国内NTP配置
@@ -224,6 +220,7 @@ EOF
         OUT_INFO "已配置国际NTP服务器"
     fi
 
+    # 启用并重启服务
     systemctl enable "${NTP_SERVICE}" || {
         OUT_ERROR "无法启用 NTP 服务：${NTP_SERVICE}"
         exit 1
