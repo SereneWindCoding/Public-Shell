@@ -169,7 +169,6 @@ EOF
     OUT_SUCCESS "[成功] DNS配置完成"
 }
 
-# 配置NTP - 根据区域选择不同的NTP服务器
 configure_ntp() {
     OUT_INFO "[信息] 配置NTP时间同步..."
     
@@ -200,10 +199,16 @@ logdir /var/log/chrony
 EOF
         OUT_INFO "[信息] 已配置国际NTP服务器"
     fi
-    
-    systemctl enable chronyd
-    systemctl restart chronyd
-    
+
+    # 修复: 使用正确的主服务名称操作
+    CHRONY_SERVICE=$(systemctl show -p FragmentPath chronyd.service 2>/dev/null | awk -F'=' '/FragmentPath/ {print $2}')
+    if [[ -z "${CHRONY_SERVICE}" ]]; then
+        CHRONY_SERVICE="chrony.service"
+    fi
+
+    systemctl enable "${CHRONY_SERVICE}" || OUT_ERROR "[错误] 启用服务失败，请检查服务名称：${CHRONY_SERVICE}"
+    systemctl restart "${CHRONY_SERVICE}" || OUT_ERROR "[错误] 重启服务失败，请检查服务配置"
+
     OUT_SUCCESS "[成功] NTP配置完成"
 }
 
