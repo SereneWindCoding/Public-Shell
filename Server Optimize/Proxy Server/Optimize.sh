@@ -142,23 +142,18 @@ configure_dns() {
         }
     fi
 
-    # 移除 /etc/resolv.conf 的符号链接
+    # 检查并移除符号链接或不可修改属性
     if [[ -L /etc/resolv.conf ]]; then
         rm -f /etc/resolv.conf
-    fi
-
-    # 备份现有的 /etc/resolv.conf 文件
-    if [[ -f /etc/resolv.conf ]]; then
+    elif [[ -f /etc/resolv.conf ]]; then
+        chattr -i /etc/resolv.conf 2>/dev/null || true
         mv /etc/resolv.conf "${BACKUP_DIR}/resolv.conf.bak" || {
             OUT_ERROR "[错误] 无法备份 /etc/resolv.conf 文件"
             exit 1
         }
     fi
 
-    # 移除可能存在的不可修改属性
-    chattr -i /etc/resolv.conf 2>/dev/null || true
-
-    # 根据选择写入 DNS 配置
+    # 写入新的 DNS 配置
     if [[ "${use_cn_dns}" =~ ^[Yy]$ ]]; then
         # 国内DNS配置
         cat > /etc/resolv.conf << EOF
@@ -188,56 +183,6 @@ EOF
     }
 
     OUT_SUCCESS "[成功] DNS配置完成"
-}
-
-configure_ntp() {
-    OUT_INFO "[信息] 配置NTP时间同步..."
-    
-    read -p "是否使用国内NTP服务器？(y/n): " use_cn_ntp
-    
-    # 检测并启用正确的 NTP 服务
-    if systemctl show -p FragmentPath chronyd.service >/dev/null 2>&1; then
-        NTP_SERVICE="chronyd.service"
-    else
-        NTP_SERVICE="chrony.service"
-    fi
-
-    if [[ "${use_cn_ntp}" =~ ^[Yy]$ ]]; then
-        # 国内NTP配置
-        cat > /etc/chrony.conf << EOF
-server ntp.aliyun.com iburst
-server cn.ntp.org.cn iburst
-server ntp.tencent.com iburst
-driftfile /var/lib/chrony/drift
-makestep 1.0 3
-rtcsync
-logdir /var/log/chrony
-EOF
-        OUT_INFO "[信息] 已配置国内NTP服务器"
-    else
-        # 国外NTP配置
-        cat > /etc/chrony.conf << EOF
-pool pool.ntp.org iburst
-pool time.google.com iburst
-pool time.cloudflare.com iburst
-driftfile /var/lib/chrony/drift
-makestep 1.0 3
-rtcsync
-logdir /var/log/chrony
-EOF
-        OUT_INFO "[信息] 已配置国际NTP服务器"
-    fi
-
-    systemctl enable "${NTP_SERVICE}" || {
-        OUT_ERROR "[错误] 无法启用 NTP 服务：${NTP_SERVICE}"
-        exit 1
-    }
-    systemctl restart "${NTP_SERVICE}" || {
-        OUT_ERROR "[错误] 无法重启 NTP 服务：${NTP_SERVICE}"
-        exit 1
-    }
-
-    OUT_SUCCESS "[成功] NTP配置完成"
 }
 
 # 检查网卡特性和兼容性
