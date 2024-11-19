@@ -20,3 +20,8 @@ bash <(curl -Ls https://cdn.jsdelivr.net/gh/SereneWindCoding/Public-Shell@refs/h
 ``` bash
 bash <(curl -Ls https://cdn.jsdelivr.net/gh/SereneWindCoding/Public-Shell@refs/heads/main/iptables/iptables-pf.sh)
 ``` 
+
+## 同步 Asia/Shanghai 时间
+``` bash
+bash <(curl -Ls https://cdn.jsdelivr.net/gh/SereneWindCoding/Public-Shell@refs/heads/main/Miscellaneous/Synctime-AsiaShanghai.sh)
+``` 
