@@ -90,15 +90,26 @@ save_config() {
 
 # 安装必要的包
 install_packages() {
-    log "更新软件包并安装必要组件..."
-    if command -v apt-get >/dev/null 2>&1; then
-        DEBIAN_FRONTEND=noninteractive apt-get update -y || error "更新软件包失败"
-        DEBIAN_FRONTEND=noninteractive apt-get install -y htpdate || error "安装 htpdate 失败"
-    elif command -v yum >/dev/null 2>&1; then
-        yum install -y htpdate || error "安装 htpdate 失败"
+    log "检查并安装必要的软件包..."
+    
+    # 检查是否已安装htpdate
+    if ! command -v htpdate &>/dev/null; then
+        log "正在安装htpdate..."
+        if command -v apt-get >/dev/null 2>&1; then
+            DEBIAN_FRONTEND=noninteractive apt-get update -y || error "更新软件包失败"
+            DEBIAN_FRONTEND=noninteractive apt-get install -y htpdate || error "安装 htpdate 失败"
+        elif command -v yum >/dev/null 2>&1; then
+            yum install -y htpdate || error "安装 htpdate 失败"
+        else
+            error "不支持的包管理器"
+        fi
     else
-        error "不支持的包管理器"
+        log "htpdate 已安装"
     fi
+    
+    # 检查其他必要命令
+    check_command timedatectl
+    check_command hwclock
 }
 
 # 同步时间
@@ -141,7 +152,7 @@ install_cron() {
     chmod +x "$FULL_SCRIPT_PATH" || error "无法设置脚本执行权限"
     
     local cron_file="/etc/cron.d/timesync"
-    printf "0 4 * * * root %s sync >> %s 2>&1\n" "$FULL_SCRIPT_PATH" "$LOG_FILE" > "$cron_file" || error "无法创建定时任务文件"
+    printf "0 4 * * * root %s >> %s 2>&1\n" "$FULL_SCRIPT_PATH" "$LOG_FILE" > "$cron_file" || error "无法创建定时任务文件"
     chmod 644 "$cron_file" || error "无法设置定时任务文件权限"
 
     # 创建日志轮转配置
@@ -174,39 +185,17 @@ cleanup() {
     fi
 }
 
-# 命令行参数处理
-handle_command() {
-    case "${1:-}" in
-        sync)
-            sync_time
-            ;;
-        install)
-            main
-            ;;
-        *)
-            echo "用法: $(basename "$0") [install|sync]"
-            echo "  install - 安装并首次运行时间同步"
-            echo "  sync    - 仅执行时间同步"
-            exit 1
-            ;;
-    esac
-}
-
 # 主函数
 main() {
     trap cleanup EXIT
     
     check_root
     create_directories
-    check_command htpdate
-    check_command timedatectl
-    check_command hwclock
-    
-    load_config
     install_packages
+    load_config
     sync_time
     install_cron
 }
 
-# 运行主程序
-handle_command "$@"
+# 运行主函数
+main
