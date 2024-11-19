@@ -151,24 +151,32 @@ EOF
 
 # 系统限制优化
 configure_system_limits() {
-   OUT_ALERT "正在优化系统限制..."
-   local limits_file="/etc/security/limits.d/99-custom-limits.conf"
-   
-   # 获取nginx运行用户
-   local nginx_user
-   if command -v nginx >/dev/null 2>&1; then
-       nginx_user=$(ps aux | grep "nginx: master" | grep -v grep | awk '{print $1}' | head -1)
-   fi
-   
-   OUT_DEBUG "检测到 Nginx 运行用户: ${nginx_user:-未检测到}"
+    OUT_ALERT "正在优化系统限制..."
+    local limits_file="/etc/security/limits.d/99-custom-limits.conf"
+    
+    # 修改获取nginx用户的逻辑，增加错误处理
+    local nginx_user=""
+    if command -v nginx >/dev/null 2>&1; then
+        # 尝试从进程中获取
+        nginx_user=$(ps aux | grep "nginx: master" | grep -v grep | awk '{print $1}' | head -1)
+        
+        # 如果上面方法失败，尝试从配置文件获取
+        if [[ -z "$nginx_user" ]]; then
+            if [[ -f /etc/nginx/nginx.conf ]]; then
+                nginx_user=$(grep -i "^user" /etc/nginx/nginx.conf | awk '{print $2}' | sed 's/;$//')
+            elif [[ -f /usr/local/nginx/conf/nginx.conf ]]; then
+                nginx_user=$(grep -i "^user" /usr/local/nginx/conf/nginx.conf | awk '{print $2}' | sed 's/;$//')
+            fi
+        fi
+    fi
 
-   # 备份原配置
-   if [[ -f $limits_file ]]; then
-       cp "$limits_file" "${limits_file}.bak.$(date +%Y%m%d%H%M%S)"
-   fi
+    # 备份现有配置
+    if [[ -f $limits_file ]]; then
+        cp "$limits_file" "${limits_file}.bak.$(date +%Y%m%d%H%M%S)"
+    fi
 
-   # 创建基础配置
-   cat > "$limits_file" << EOF
+    # 创建基础配置
+    cat > "$limits_file" << EOF
 # 系统限制参数优化
 # Created: $(date +%Y-%m-%d)
 # For: High Performance Web Server
@@ -182,18 +190,18 @@ configure_system_limits() {
 * hard stack 16384
 EOF
 
-   # 如果找到nginx用户，添加特定限制
-   if [[ -n "$nginx_user" ]]; then
-       cat >> "$limits_file" << EOF
+    # 如果找到nginx用户，添加特定限制
+    if [[ -n "$nginx_user" ]]; then
+        cat >> "$limits_file" << EOF
 
 # Nginx user specific limits
 $nginx_user soft nofile 2000000
 $nginx_user hard nofile 2000000
 EOF
-       OUT_SUCCESS "已为 Nginx 用户 ($nginx_user) 添加特定限制"
-   else
-       OUT_ALERT "未检测到 Nginx 用户，仅应用全局限制"
-   fi
+        OUT_SUCCESS "已为 Nginx 用户 ($nginx_user) 添加特定限制"
+    else
+        OUT_ALERT "未检测到 Nginx 用户，仅应用全局限制"
+    fi
 }
 
 # 检查并加载必要的内核模块
