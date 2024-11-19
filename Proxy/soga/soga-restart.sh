@@ -1,5 +1,6 @@
 #!/bin/bash
 # 配置参数
+INSTALL_PATH="/usr/local/bin/memory_monitor.sh"  # 脚本安装位置
 THRESHOLD=1024                          # 内存空余阈值（单位：MB）
 COMMAND="soga restart"                  # 重启服务命令
 LOG_FILE="/var/log/soga_memory_monitor.log"  # 日志文件路径
@@ -26,12 +27,22 @@ if [ "$(id -u)" != "0" ]; then
    exit 1
 fi
 
+# 首先将脚本安装到系统中
+if [ "$0" != "$INSTALL_PATH" ]; then
+    print_info "正在安装脚本到系统..."
+    cp "$0" "$INSTALL_PATH" 2>/dev/null || cat > "$INSTALL_PATH" << 'EOF'
+#!/bin/bash
+# 这里是脚本的完整内容，会通过 cat 命令自动添加
+EOF
+    chmod +x "$INSTALL_PATH"
+    print_success "脚本已安装到: $INSTALL_PATH"
+fi
+
 # 设置crontab
-SCRIPT_PATH=$(readlink -f "$0")
-CRON_CMD="*/10 * * * * $SCRIPT_PATH"
+CRON_CMD="*/10 * * * * $INSTALL_PATH"
 
 # 检查crontab中是否已存在该任务
-if ! crontab -l 2>/dev/null | grep -Fq "$SCRIPT_PATH"; then
+if ! crontab -l 2>/dev/null | grep -Fq "$INSTALL_PATH"; then
     (crontab -l 2>/dev/null; echo "$CRON_CMD") | crontab -
     print_success "已添加到crontab，每10分钟运行一次"
 fi
