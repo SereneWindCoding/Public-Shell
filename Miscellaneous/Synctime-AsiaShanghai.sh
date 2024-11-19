@@ -18,12 +18,16 @@ readonly CONFIG_FILE="/etc/timesync.conf"
 
 # 默认配置
 readonly DEFAULT_TIMEZONE="Asia/Shanghai"
-readonly DEFAULT_SERVERS=(
+declare -a DEFAULT_SERVERS=(
     "ntp.aliyun.com"
     "time1.cloud.tencent.com"
     "cn.pool.ntp.org"
     "ntp.ntsc.ac.cn"
 )
+
+# 声明全局变量
+declare TIMEZONE
+declare -a NTP_SERVERS
 
 # 日志函数
 log() {
@@ -78,8 +82,8 @@ save_config() {
     log "保存配置到 $CONFIG_FILE"
     {
         echo "TIMEZONE=\"$TIMEZONE\""
-        echo -n "NTP_SERVERS=("
-        printf "\"%s\" " "${NTP_SERVERS[@]}"
+        echo "NTP_SERVERS=("
+        printf '    "%s"\n' "${NTP_SERVERS[@]}"
         echo ")"
     } > "$CONFIG_FILE"
 }
@@ -88,8 +92,8 @@ save_config() {
 install_packages() {
     log "更新软件包并安装必要组件..."
     if command -v apt-get >/dev/null 2>&1; then
-        apt-get update -y || error "更新软件包失败"
-        apt-get install -y htpdate || error "安装 htpdate 失败"
+        DEBIAN_FRONTEND=noninteractive apt-get update -y || error "更新软件包失败"
+        DEBIAN_FRONTEND=noninteractive apt-get install -y htpdate || error "安装 htpdate 失败"
     elif command -v yum >/dev/null 2>&1; then
         yum install -y htpdate || error "安装 htpdate 失败"
     else
@@ -137,10 +141,8 @@ install_cron() {
     chmod +x "$FULL_SCRIPT_PATH" || error "无法设置脚本执行权限"
     
     local cron_file="/etc/cron.d/timesync"
-    # 确保cron任务以换行符结束
-    printf "0 4 * * * root %s >> %s 2>&1\n" "$FULL_SCRIPT_PATH" "$LOG_FILE" > "$cron_file" || error "无法创建定时任务文件"
+    printf "0 4 * * * root %s sync >> %s 2>&1\n" "$FULL_SCRIPT_PATH" "$LOG_FILE" > "$cron_file" || error "无法创建定时任务文件"
     chmod 644 "$cron_file" || error "无法设置定时任务文件权限"
-}
 
     # 创建日志轮转配置
     cat > "/etc/logrotate.d/timesync" << EOF || error "无法创建日志轮转配置"
@@ -157,7 +159,7 @@ EOF
 
     # 重启 cron 服务
     if command -v systemctl >/dev/null 2>&1; then
-        systemctl restart cron || systemctl restart crond || error "无法重启 cron 服务"
+        systemctl restart cron.service || systemctl restart crond.service || error "无法重启 cron 服务"
     else
         service cron restart || service crond restart || error "无法重启 cron 服务"
     fi
@@ -170,6 +172,24 @@ cleanup() {
     if [[ $exit_code -ne 0 ]]; then
         error "脚本执行失败，退出码: $exit_code"
     fi
+}
+
+# 命令行参数处理
+handle_command() {
+    case "${1:-}" in
+        sync)
+            sync_time
+            ;;
+        install)
+            main
+            ;;
+        *)
+            echo "用法: $(basename "$0") [install|sync]"
+            echo "  install - 安装并首次运行时间同步"
+            echo "  sync    - 仅执行时间同步"
+            exit 1
+            ;;
+    esac
 }
 
 # 主函数
@@ -188,5 +208,5 @@ main() {
     install_cron
 }
 
-# 运行主函数
-main
+# 运行主程序
+handle_command "$@"
