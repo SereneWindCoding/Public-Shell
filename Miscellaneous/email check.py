@@ -3,11 +3,10 @@ import re
 from dns import resolver
 import socket
 import smtplib
-from typing import Dict, Any
+import ssl
 import logging
 import time
 import pandas as pd
-from threading import Lock
 import sys
 from datetime import datetime
 import concurrent.futures
@@ -19,132 +18,23 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
-class RateLimiter:
-    def __init__(self):
-        self.last_query_time = {}
-        self.provider_last_query = {}
-        self.global_last_query = 0
-        self.lock = Lock()
-        
-        # 配置参数
-        self.min_domain_interval = 0.3    # 单个域名最小间隔(秒)
-        self.min_provider_interval = 0.2  # 单个服务商最小间隔(秒)
-        self.min_global_interval = 0.1    # 全局最小间隔(秒)
-        
-        # 更新的邮件服务商域名映射
-        self.provider_domains = {
-            # Google
-            'gmail.com': 'google',
-            'googlemail.com': 'google',
-            
-            # Microsoft
-            'outlook.com': 'microsoft',
-            'hotmail.com': 'microsoft',
-            'live.com': 'microsoft',
-            'msn.com': 'microsoft',
-            
-            # Yahoo
-            'yahoo.com': 'yahoo',
-            'yahoo.co.jp': 'yahoo',
-            'yahoomail.com': 'yahoo',
-            
-            # Apple
-            'icloud.com': 'apple',
-            'me.com': 'apple',
-            'mac.com': 'apple',
-            
-            # 腾讯
-            'qq.com': 'tencent',
-            'foxmail.com': 'tencent',
-            
-            # 网易
-            '163.com': 'netease',
-            '126.com': 'netease',
-            'yeah.net': 'netease',
-            
-            # 新浪
-            'sina.com': 'sina',
-            'sina.cn': 'sina',
-            'sina.com.cn': 'sina',
-            
-            # 搜狐
-            'sohu.com': 'sohu',
-            'sohu.net': 'sohu',
-            
-            # ProtonMail
-            'protonmail.com': 'proton',
-            'protonmail.ch': 'proton',
-            'pm.me': 'proton',
-            
-            # 阿里
-            'aliyun.com': 'alibaba',
-            'alimail.com': 'alibaba',
-            
-            # 其他主要中国邮箱服务商
-            '139.com': 'china_mobile',    # 中国移动
-            'wo.cn': 'china_unicom',      # 中国联通
-            '21cn.com': '21cn',
-            'tom.com': 'tom',
-            
-            # 其他国际邮箱服务商
-            'zoho.com': 'zoho',
-            'mail.com': 'mail_com',
-            'yandex.com': 'yandex',
-            'yandex.ru': 'yandex'
-        }
-        
-        # 服务商速率限制配置（可以针对不同服务商设置不同的限制）
-        self.provider_limits = {
-            'google': 0.3,      # Google 较严格
-            'microsoft': 0.3,   # Microsoft 较严格
-            'yahoo': 0.3,       # Yahoo 较严格
-            'tencent': 0.2,     # 腾讯相对宽松
-            'netease': 0.2,     # 网易相对宽松
-            'default': 0.3      # 默认限制
-        }
-    
-    def get_provider_limit(self, provider: str) -> float:
-        """获取服务商的速率限制"""
-        return self.provider_limits.get(provider, self.provider_limits['default'])
-    
-    def wait(self, domain: str):
-        """实施速率限制"""
-        with self.lock:
-            current_time = time.time()
-            provider = self.get_provider(domain)
-            provider_limit = self.get_provider_limit(provider)
-            
-            # 检查域名限制
-            if domain in self.last_query_time:
-                domain_wait = self.min_domain_interval - (current_time - self.last_query_time[domain])
-                if domain_wait > 0:
-                    time.sleep(domain_wait)
-            
-            # 检查服务商限制
-            if provider in self.provider_last_query:
-                provider_wait = provider_limit - (current_time - self.provider_last_query[provider])
-                if provider_wait > 0:
-                    time.sleep(provider_wait)
-            
-            # 检查全局限制
-            global_wait = self.min_global_interval - (current_time - self.global_last_query)
-            if global_wait > 0:
-                time.sleep(global_wait)
-            
-            # 更新时间戳
-            current_time = time.time()
-            self.last_query_time[domain] = current_time
-            self.provider_last_query[provider] = current_time
-            self.global_last_query = current_time
-
-    def get_provider(self, domain: str) -> str:
-        """获取域名对应的服务商"""
-        return self.provider_domains.get(domain.lower(), domain.lower())
-
 class EmailValidator:
-    def __init__(self, timeout: int = 10):
+    def __init__(self, timeout: int = 5):
         self.timeout = timeout
         self.basic_regex = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        self.smtp_ports = [25, 587, 465]  # 常用SMTP端口
+        
+        # 已知的有效域名列表
+        self.valid_domains = {
+            # 国际邮箱
+            'gmail.com', 'outlook.com', 'hotmail.com', 'yahoo.com', 
+            'icloud.com', 'protonmail.com', 'live.com', 'msn.com',
+            
+            # 中国邮箱
+            'qq.com', '163.com', '126.com', 'sina.com', 'sohu.com',
+            'yeah.net', 'foxmail.com', '139.com', 'aliyun.com', 
+            '21cn.com', 'wo.cn', 'tom.com'
+        }
         
         # DNS解析器配置
         self.resolver = resolver.Resolver()
@@ -154,29 +44,60 @@ class EmailValidator:
             '8.8.8.8',    # Google DNS
             '1.1.1.1',    # Cloudflare DNS
         ]
-        
-        self.rate_limiter = RateLimiter()
     
     def verify_dns(self, domain: str) -> tuple:
-        """DNS验证"""
+        """验证域名DNS记录"""
         try:
-            self.rate_limiter.wait(domain)
             mx_records = self.resolver.resolve(domain, 'MX')
-            return True, [str(r.exchange).rstrip('.') for r in mx_records]
+            # 按优先级排序MX记录
+            mx_list = sorted([(r.preference, str(r.exchange).rstrip('.')) 
+                            for r in mx_records])
+            return True, [mx for _, mx in mx_list]
         except Exception as e:
             return False, []
 
-    def verify_smtp(self, mx_server: str, domain: str) -> tuple:
-        """SMTP验证"""
-        try:
-            self.rate_limiter.wait(domain)
-            with smtplib.SMTP(timeout=self.timeout) as smtp:
-                smtp.connect(mx_server, port=25)
-                return True, ''
-        except Exception as e:
-            return False, str(e)
+    def verify_smtp(self, mx_server: str) -> tuple:
+        """验证SMTP连接，尝试多个端口"""
+        error_messages = []
+        
+        for port in self.smtp_ports:
+            try:
+                if port == 465:
+                    # SSL连接
+                    context = ssl.create_default_context()
+                    with smtplib.SMTP_SSL(mx_server, port, 
+                                        timeout=self.timeout, 
+                                        context=context) as smtp:
+                        smtp.ehlo()
+                        return True, f"SSL连接成功(端口{port})"
+                else:
+                    # 普通连接
+                    with smtplib.SMTP(timeout=self.timeout) as smtp:
+                        smtp.connect(mx_server, port=port)
+                        smtp.ehlo()
+                        
+                        # 如果服务器支持STARTTLS，尝试升级到TLS
+                        if port == 587:
+                            try:
+                                smtp.starttls()
+                                smtp.ehlo()
+                            except:
+                                pass
+                        
+                        return True, f"连接成功(端口{port})"
+                        
+            except socket.timeout:
+                error_messages.append(f"端口{port}超时")
+            except ConnectionRefusedError:
+                error_messages.append(f"端口{port}被拒绝")
+            except ssl.SSLError:
+                error_messages.append(f"端口{port} SSL错误")
+            except Exception as e:
+                error_messages.append(f"端口{port}错误: {str(e)}")
+        
+        return False, " | ".join(error_messages)
 
-    def validate_email(self, email: str) -> Dict[str, Any]:
+    def validate_email(self, email: str) -> dict:
         """验证单个邮箱"""
         result = {
             'email': email,
@@ -185,7 +106,9 @@ class EmailValidator:
             'smtp_valid': False,
             'mx_records': [],
             'error_message': '',
-            'time_taken': 0
+            'smtp_details': '',
+            'time_taken': 0,
+            'validation_type': ''
         }
         
         start_time = time.time()
@@ -203,26 +126,42 @@ class EmailValidator:
                 result['error_message'] = '格式无效'
                 return result
             
-            # DNS验证
+            # 获取域名
             domain = email.split('@')[1]
-            has_mx, mx_records = self.verify_dns(domain)
             
-            result['mx_records'] = mx_records
+            # 检查是否是已知的有效域名
+            if domain in self.valid_domains:
+                result['is_valid'] = True
+                result['has_mx'] = True
+                result['smtp_valid'] = True
+                result['validation_type'] = '已知域名'
+                return result
+            
+            # 对未知域名进行完整验证
+            result['validation_type'] = '完整验证'
+            
+            # 1. DNS验证
+            has_mx, mx_records = self.verify_dns(domain)
             result['has_mx'] = has_mx
+            result['mx_records'] = mx_records
             
             if not has_mx:
                 result['error_message'] = '域名MX记录不存在'
                 return result
             
-            # SMTP验证
-            smtp_valid, smtp_error = self.verify_smtp(mx_records[0], domain)
-            result['smtp_valid'] = smtp_valid
+            # 2. SMTP验证（尝试多个MX服务器）
+            for mx_server in mx_records[:2]:  # 只尝试前两个MX服务器
+                smtp_valid, smtp_details = self.verify_smtp(mx_server)
+                if smtp_valid:
+                    result['smtp_valid'] = True
+                    result['smtp_details'] = smtp_details
+                    result['is_valid'] = True
+                    break
+                else:
+                    result['smtp_details'] = f"{mx_server}: {smtp_details}"
             
-            if not smtp_valid:
-                result['error_message'] = smtp_error
-                return result
-            
-            result['is_valid'] = True
+            if not result['smtp_valid']:
+                result['error_message'] = f"SMTP验证失败: {result['smtp_details']}"
             
         except Exception as e:
             result['error_message'] = f'验证错误: {str(e)}'
@@ -231,7 +170,7 @@ class EmailValidator:
         
         return result
 
-def process_file(input_file: str, max_workers: int = 5):
+def process_file(input_file: str, max_workers: int = 10):
     """处理CSV文件"""
     start_time = time.time()
     logging.info(f"开始处理文件: {input_file}")
@@ -242,35 +181,34 @@ def process_file(input_file: str, max_workers: int = 5):
         total_emails = len(df)
         processed = 0
         valid_count = 0
+        known_domain_count = 0
         
         logging.info(f"总共需要处理 {total_emails} 个邮箱\n")
         
         # 创建或更新结果列
-        df['valid_format'] = False
-        df['has_mx'] = False
-        df['smtp_valid'] = False
-        df['mx_servers'] = ''
-        df['error_message'] = ''
-        df['validation_time_ms'] = 0
+        columns = ['valid_format', 'has_mx', 'smtp_valid', 'mx_servers', 
+                  'error_message', 'smtp_details', 'validation_time_ms', 
+                  'validation_type']
+        for col in columns:
+            if col not in df.columns:
+                df[col] = ''
         
         # 进度显示格式
-        format_str = "{:<30} {:<12} {:<8} {:<8} {:<8} {:<20}"
+        format_str = "{:<30} {:<12} {:<8} {:<8} {:<8} {:<15} {:<20}"
         
         # 打印表头
         logging.info(format_str.format(
-            '邮箱', '结果', 'DNS', 'SMTP', '耗时', '错误信息'
+            '邮箱', '结果', 'MX', 'SMTP', '耗时', '验证类型', '详情'
         ))
-        logging.info("-" * 80)
+        logging.info("-" * 100)
         
         # 初始化验证器
         validator = EmailValidator()
         
         # 处理每个邮箱
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {
-                executor.submit(validator.validate_email, email): idx
-                for idx, email in enumerate(df['email'])
-            }
+            futures = {executor.submit(validator.validate_email, email): idx 
+                      for idx, email in enumerate(df['email'])}
             
             for future in concurrent.futures.as_completed(futures):
                 idx = futures[future]
@@ -278,16 +216,15 @@ def process_file(input_file: str, max_workers: int = 5):
                     result = future.result()
                     
                     # 更新DataFrame
-                    df.at[idx, 'valid_format'] = True
-                    df.at[idx, 'has_mx'] = result['has_mx']
-                    df.at[idx, 'smtp_valid'] = result['smtp_valid']
-                    df.at[idx, 'mx_servers'] = ','.join(result['mx_records'])
-                    df.at[idx, 'error_message'] = result['error_message']
-                    df.at[idx, 'validation_time_ms'] = result['time_taken']
+                    for col in columns:
+                        if col in result:
+                            df.at[idx, col] = result[col]
                     
                     processed += 1
                     if result['is_valid']:
                         valid_count += 1
+                    if result['validation_type'] == '已知域名':
+                        known_domain_count += 1
                     
                     # 显示验证结果
                     logging.info(format_str.format(
@@ -296,7 +233,8 @@ def process_file(input_file: str, max_workers: int = 5):
                         '✓' if result['has_mx'] else '✗',
                         '✓' if result['smtp_valid'] else '✗',
                         str(result['time_taken']),
-                        result['error_message'][:20]
+                        result['validation_type'],
+                        result['smtp_details'][:20]
                     ))
                     
                     # 每处理100个邮箱保存一次
@@ -317,6 +255,8 @@ def process_file(input_file: str, max_workers: int = 5):
 - 总邮箱数: {total_emails}
 - 有效邮箱数: {valid_count}
 - 无效邮箱数: {total_emails - valid_count}
+- 已知域名数: {known_domain_count}
+- 需完整验证: {total_emails - known_domain_count}
 - 有效率: {(valid_count/total_emails*100):.1f}%
 - 总耗时: {total_time:.1f}秒
 - 平均速度: {(total_time/total_emails*1000):.1f}毫秒/封
