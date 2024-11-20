@@ -170,6 +170,33 @@ class EmailValidator:
         
         return result
 
+def format_log_message(result):
+    """格式化日志消息"""
+    # 基本信息行
+    base_info = "{:<30} {:<10} {:<6} {:<6} {:<6}".format(
+        result['email'][:30],
+        '✓ 有效' if result['is_valid'] else '✗ 无效',
+        '✓' if result['has_mx'] else '✗',
+        '✓' if result['smtp_valid'] else '✗',
+        str(result['time_taken'])
+    )
+    
+    # 详细信息
+    details = [
+        f"验证类型: {result['validation_type']}",
+        f"MX服务器: {', '.join(result['mx_records'][:3]) if result['mx_records'] else 'N/A'}",
+        f"SMTP详情: {result['smtp_details']}" if result['smtp_details'] else "",
+        f"错误信息: {result['error_message']}" if result['error_message'] else ""
+    ]
+    
+    # 过滤掉空字符串
+    details = [d for d in details if d]
+    
+    # 组合消息
+    if any(details):
+        return f"{base_info}\n    " + "\n    ".join(details) + "\n"
+    return base_info
+
 def process_file(input_file: str, max_workers: int = 10):
     """处理CSV文件"""
     start_time = time.time()
@@ -193,14 +220,11 @@ def process_file(input_file: str, max_workers: int = 10):
             if col not in df.columns:
                 df[col] = ''
         
-        # 进度显示格式
-        format_str = "{:<30} {:<12} {:<8} {:<8} {:<8} {:<15} {:<20}"
-        
         # 打印表头
-        logging.info(format_str.format(
-            '邮箱', '结果', 'MX', 'SMTP', '耗时', '验证类型', '详情'
+        logging.info("{:<30} {:<10} {:<6} {:<6} {:<6}".format(
+            '邮箱', '结果', 'MX', 'SMTP', '耗时'
         ))
-        logging.info("-" * 100)
+        logging.info("-" * 60)
         
         # 初始化验证器
         validator = EmailValidator()
@@ -227,20 +251,13 @@ def process_file(input_file: str, max_workers: int = 10):
                         known_domain_count += 1
                     
                     # 显示验证结果
-                    logging.info(format_str.format(
-                        result['email'][:30],
-                        '✓ 有效' if result['is_valid'] else '✗ 无效',
-                        '✓' if result['has_mx'] else '✗',
-                        '✓' if result['smtp_valid'] else '✗',
-                        str(result['time_taken']),
-                        result['validation_type'],
-                        result['smtp_details'][:20]
-                    ))
+                    logging.info(format_log_message(result))
                     
-                    # 每处理100个邮箱保存一次
+                    # 每处理100个邮箱保存一次并显示进度
                     if processed % 100 == 0:
                         df.to_csv(input_file, index=False)
-                        logging.info(f"\n已处理: {processed}/{total_emails} ({processed/total_emails*100:.1f}%)\n")
+                        progress = f"\n处理进度: {processed}/{total_emails} ({processed/total_emails*100:.1f}%)"
+                        logging.info(f"{'-'*60}\n{progress}\n{'-'*60}\n")
                     
                 except Exception as e:
                     logging.error(f"处理错误: {str(e)}")
@@ -251,6 +268,7 @@ def process_file(input_file: str, max_workers: int = 10):
         # 打印统计信息
         total_time = time.time() - start_time
         logging.info(f"""
+{'='*60}
 验证完成:
 - 总邮箱数: {total_emails}
 - 有效邮箱数: {valid_count}
@@ -261,6 +279,7 @@ def process_file(input_file: str, max_workers: int = 10):
 - 总耗时: {total_time:.1f}秒
 - 平均速度: {(total_time/total_emails*1000):.1f}毫秒/封
 - 结果已保存到: {input_file}
+{'='*60}
         """)
         
     except Exception as e:
