@@ -1,5 +1,4 @@
 #!/bin/bash
-
 # 配置文件路径
 CONFIG_FILE="/opt/nezha/agent/config.yml"
 
@@ -38,4 +37,10 @@ grep -E "disable_|report_delay:" "$CONFIG_FILE"
 # 删除备份文件
 rm "${CONFIG_FILE}.backup"
 
-echo "脚本执行完成"
+# 重启 nezha-agent 服务
+if ! sudo systemctl restart nezha-agent.service; then
+    echo "错误：重启 nezha-agent 服务失败"
+    exit 1
+fi
+
+echo "脚本执行完成，服务已重启"
