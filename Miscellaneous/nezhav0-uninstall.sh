@@ -20,6 +20,10 @@ check_root() {
 
 # Function to uninstall service and remove files
 uninstall_agent() {
+    # Kill any running nezha-agent processes
+    killall nezha-agent 2>/dev/null
+    echo "已终止所有 nezha-agent 进程"
+
     if [ -f "${NEZHA_AGENT_PATH}/nezha-agent" ]; then
         ${NEZHA_AGENT_PATH}/nezha-agent service uninstall
         echo "已停止并卸载 Nezha Agent 服务"

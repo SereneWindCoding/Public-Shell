@@ -30,3 +30,8 @@ bash <(curl -Ls https://cdn.jsdelivr.net/gh/SereneWindCoding/Public-Shell@refs/h
 ``` bash
 bash <(curl -Ls https://cdn.jsdelivr.net/gh/SereneWindCoding/Public-Shell@refs/heads/main/Miscellaneous/nezhav0-uninstall.sh)
 ``` 
+
+## Nezha V1 参数优化
+``` bash
+bash <(curl -Ls https://cdn.jsdelivr.net/gh/SereneWindCoding/Public-Shell@refs/heads/main/Miscellaneous/nezhav1optimize.sh)
+``` 
