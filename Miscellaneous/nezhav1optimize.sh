@@ -1,5 +1,5 @@
 #!/bin/bash
-# 配置文件路径
+
 CONFIG_FILE="/opt/nezha/agent/config.yml"
 
 # 检查文件是否存在
