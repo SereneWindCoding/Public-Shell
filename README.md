@@ -33,5 +33,5 @@ bash <(curl -Ls https://cdn.jsdelivr.net/gh/SereneWindCoding/Public-Shell@refs/h
 
 ## Nezha V1 参数优化
 ``` bash
-bash <(curl -Ls https://cdn.jsdelivr.net/gh/SereneWindCoding/Public-Shell@refs/heads/main/Miscellaneous/nezhav1optimize.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/SereneWindCoding/Public-Shell/refs/heads/main/Miscellaneous/nezhav1optimize.sh)
 ``` 
