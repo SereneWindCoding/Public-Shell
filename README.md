@@ -25,3 +25,8 @@ bash <(curl -Ls https://cdn.jsdelivr.net/gh/SereneWindCoding/Public-Shell@refs/h
 ``` bash
 bash <(curl -Ls https://cdn.jsdelivr.net/gh/SereneWindCoding/Public-Shell@refs/heads/main/Miscellaneous/Synctime-AsiaShanghai.sh)
 ``` 
+
+## 卸载 Nezha Agent V0
+``` bash
+bash <(curl -Ls https://cdn.jsdelivr.net/gh/SereneWindCoding/Public-Shell@refs/heads/main/Miscellaneous/nezhav0-uninstall.sh)
+``` 
