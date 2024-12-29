@@ -8,6 +8,9 @@ LOG_FILE="/var/log/server-optimization.log"
 BACKUP_DIR="/root/system_backup"
 NIC_CHECK_FILE="/var/log/network-check.log"
 
+# ipinfo.io API token
+IPINFO_TOKEN="替换为你的Token"
+
 # 定义颜色输出
 echo=echo
 for cmd in echo /bin/echo; do
@@ -32,6 +35,32 @@ OUT_ALERT() { echo -e "${CYELLOW} $1 ${CEND}" | tee -a "$LOG_FILE"; }
 OUT_ERROR() { echo -e "${CRED} $1 ${CEND}" | tee -a "$LOG_FILE"; }
 OUT_INFO() { echo -e "${CCYAN} $1 ${CEND}" | tee -a "$LOG_FILE"; }
 OUT_SUCCESS() { echo -e "${CGREEN} $1 ${CEND}" | tee -a "$LOG_FILE"; }
+
+# 检查是否在中国
+check_location() {
+    OUT_INFO "[信息] 正在检查服务器位置..."
+    
+    # 使用ipinfo.io API获取位置信息
+    local location_info
+    location_info=$(curl -s "https://ipinfo.io?token=${IPINFO_TOKEN}")
+    
+    if [ $? -ne 0 ]; then
+        OUT_ERROR "[错误] 无法获取位置信息，默认使用国际配置"
+        echo "false"
+        return
+    fi
+    
+    local country
+    country=$(echo "$location_info" | grep -o '"country": "[^"]*' | cut -d'"' -f4)
+    
+    if [ "$country" == "CN" ]; then
+        OUT_INFO "[信息] 检测到服务器位于中国"
+        echo "true"
+    else
+        OUT_INFO "[信息] 检测到服务器位于海外：$country"
+        echo "false"
+    fi
+}
 
 # 检查root权限
 check_root() {
@@ -99,19 +128,19 @@ check_virtualization() {
 
 # 检查网卡类型
 check_nic_type() {
-    local interface=$1
+    local interface="$1"
     local is_virtio=0
     
     # 检查是否为virtio网卡
-    if ethtool -i $interface 2>/dev/null | grep -q "driver: virtio"; then
+    if ethtool -i "$interface" 2>/dev/null | grep -q "driver: virtio"; then
         is_virtio=1
     elif lspci | grep -i "virtio" | grep -i "network" &>/dev/null; then
         is_virtio=1
-    elif dmesg | grep -i "virtio.*network" | grep $interface &>/dev/null; then
+    elif dmesg | grep -i "virtio.*network" | grep -q "$interface" &>/dev/null; then
         is_virtio=1
     fi
     
-    echo $is_virtio
+    echo "$is_virtio"
 }
 
 # 安装必要工具
@@ -127,14 +156,15 @@ install_requirements() {
     OUT_SUCCESS "[成功] 工具安装完成"
 }
 
-# 配置DNS - 根据区域选择不同的DNS服务器
+# 配置DNS - 自动根据位置选择DNS服务器
 configure_dns() {
     OUT_INFO "配置系统DNS..."
-
-    read -p "是否使用国内DNS？(y/n): " use_cn_dns
+    
+    # 获取位置信息
+    local is_in_china
+    is_in_china=$(check_location)
 
     # 确保备份目录存在
-    BACKUP_DIR="/root/system_backup"
     if [[ ! -d "${BACKUP_DIR}" ]]; then
         mkdir -p "${BACKUP_DIR}" || {
             OUT_ERROR "无法创建备份目录：${BACKUP_DIR}"
@@ -154,7 +184,7 @@ configure_dns() {
     fi
 
     # 写入新的 DNS 配置
-    if [[ "${use_cn_dns}" =~ ^[Yy]$ ]]; then
+    if [[ "${is_in_china}" == "true" ]]; then
         # 国内DNS配置
         cat > /etc/resolv.conf << EOF
 options timeout:2 attempts:3 rotate
@@ -185,16 +215,18 @@ EOF
     OUT_SUCCESS "DNS配置完成"
 }
 
-# 配置NTP - 根据区域选择不同的NTP服务器
+# 配置NTP - 自动根据位置选择NTP服务器
 configure_ntp() {
     OUT_INFO "配置NTP时间同步..."
-
-    read -p "是否使用国内NTP服务器？(y/n): " use_cn_ntp
+    
+    # 获取位置信息
+    local is_in_china
+    is_in_china=$(check_location)
 
     # 使用真实服务名称 chrony.service
     NTP_SERVICE="chrony.service"
 
-    if [[ "${use_cn_ntp}" =~ ^[Yy]$ ]]; then
+    if [[ "${is_in_china}" == "true" ]]; then
         # 国内NTP配置
         cat > /etc/chrony.conf << EOF
 server ntp.aliyun.com iburst
@@ -233,16 +265,20 @@ EOF
     OUT_SUCCESS "NTP配置完成"
 }
 
-# 检查网卡特性和兼容性
+# 网卡特性和兼容性检查
 declare -A NIC_FEATURES
 check_nic_compatibility() {
-    local interface=$1
+    local interface="$1"
     OUT_INFO "[信息] 检查网卡 $interface 的特性支持情况..."
     
     # 获取网卡基本信息
-    local driver=$(ethtool -i $interface 2>/dev/null | grep "^driver:" | cut -d: -f2 | tr -d ' ')
-    local version=$(ethtool -i $interface 2>/dev/null | grep "^version:" | cut -d: -f2 | tr -d ' ')
-    local firmware=$(ethtool -i $interface 2>/dev/null | grep "^firmware-version:" | cut -d: -f2 | tr -d ' ')
+    local driver
+    local version
+    local firmware
+    
+    driver=$(ethtool -i "$interface" 2>/dev/null | grep "^driver:" | cut -d: -f2 | tr -d ' ')
+    version=$(ethtool -i "$interface" 2>/dev/null | grep "^version:" | cut -d: -f2 | tr -d ' ')
+    firmware=$(ethtool -i "$interface" 2>/dev/null | grep "^firmware-version:" | cut -d: -f2 | tr -d ' ')
     
     OUT_INFO "网卡信息: 驱动=$driver, 版本=$version, 固件=$firmware"
     
@@ -250,31 +286,31 @@ check_nic_compatibility() {
     local features=""
     
     # 检查TSO支持
-    if ethtool -k $interface 2>/dev/null | grep -q "tcp-segmentation-offload: on"; then
+    if ethtool -k "$interface" 2>/dev/null | grep -q "tcp-segmentation-offload: on"; then
         features+="tso "
         NIC_FEATURES[$interface]+="tso "
     fi
     
     # 检查GSO支持
-    if ethtool -k $interface 2>/dev/null | grep -q "generic-segmentation-offload: on"; then
+    if ethtool -k "$interface" 2>/dev/null | grep -q "generic-segmentation-offload: on"; then
         features+="gso "
         NIC_FEATURES[$interface]+="gso "
     fi
     
     # 检查GRO支持
-    if ethtool -k $interface 2>/dev/null | grep -q "generic-receive-offload: on"; then
+    if ethtool -k "$interface" 2>/dev/null | grep -q "generic-receive-offload: on"; then
         features+="gro "
         NIC_FEATURES[$interface]+="gro "
     fi
     
     # 检查队列大小调整支持
-    if ethtool -g $interface &>/dev/null; then
+    if ethtool -g "$interface" &>/dev/null; then
         features+="queue "
         NIC_FEATURES[$interface]+="queue "
     fi
     
     # 检查中断合并支持
-    if ethtool -c $interface &>/dev/null; then
+    if ethtool -c "$interface" &>/dev/null; then
         features+="coalesce "
         NIC_FEATURES[$interface]+="coalesce "
     fi
@@ -292,11 +328,15 @@ check_nic_compatibility() {
     fi
     
     # 返回是否是现代网卡
-    echo $is_modern
+    echo "$is_modern"
 }
-# 创建一个开机自动执行的网卡优化脚本
+
+# 创建开机自动执行的网卡优化脚本
 optimize_network() {
     OUT_INFO "[信息] 配置网卡优化..."
+    
+    # 创建网卡优化脚本目录（如果不存在）
+    mkdir -p /etc/network/if-up.d/
     
     # 创建网卡优化脚本
     cat > /etc/network/if-up.d/network-optimize << 'EOF'
@@ -308,30 +348,30 @@ optimize_network() {
 
 # 获取网卡类型
 is_virtio=0
-if ethtool -i $IFACE 2>/dev/null | grep -q "driver: virtio"; then
+if ethtool -i "$IFACE" 2>/dev/null | grep -q "driver: virtio"; then
     is_virtio=1
 fi
 
 # 基础优化
-ethtool -K $IFACE rx-checksumming on 2>/dev/null || true
-ethtool -K $IFACE tx-checksumming on 2>/dev/null || true
-ethtool -K $IFACE scatter-gather on 2>/dev/null || true
+ethtool -K "$IFACE" rx-checksumming on 2>/dev/null || true
+ethtool -K "$IFACE" tx-checksumming on 2>/dev/null || true
+ethtool -K "$IFACE" scatter-gather on 2>/dev/null || true
 
 if [ $is_virtio -eq 1 ]; then
     # virtio网卡优化
-    ethtool -K $IFACE gso off 2>/dev/null || true
-    ethtool -K $IFACE tso off 2>/dev/null || true
-    ethtool -K $IFACE gro off 2>/dev/null || true
-    ethtool -C $IFACE rx-usecs 50 tx-usecs 50 2>/dev/null || true
+    ethtool -K "$IFACE" gso off 2>/dev/null || true
+    ethtool -K "$IFACE" tso off 2>/dev/null || true
+    ethtool -K "$IFACE" gro off 2>/dev/null || true
+    ethtool -C "$IFACE" rx-usecs 50 tx-usecs 50 2>/dev/null || true
 else
     # 物理网卡优化
-    if ethtool -k $IFACE | grep -q "tcp-segmentation-offload: on"; then
-        ethtool -K $IFACE tso on 2>/dev/null || true
-        ethtool -K $IFACE gso on 2>/dev/null || true
+    if ethtool -k "$IFACE" | grep -q "tcp-segmentation-offload: on"; then
+        ethtool -K "$IFACE" tso on 2>/dev/null || true
+        ethtool -K "$IFACE" gso on 2>/dev/null || true
     fi
-    ethtool -K $IFACE gro off 2>/dev/null || true
-    ethtool -G $IFACE rx 4096 tx 4096 2>/dev/null || true
-    ethtool -C $IFACE adaptive-rx off adaptive-tx off \
+    ethtool -K "$IFACE" gro off 2>/dev/null || true
+    ethtool -G "$IFACE" rx 4096 tx 4096 2>/dev/null || true
+    ethtool -C "$IFACE" adaptive-rx off adaptive-tx off \
             rx-usecs 100 tx-usecs 100 \
             rx-frames 64 tx-frames 64 2>/dev/null || true
 fi
@@ -347,21 +387,21 @@ if [ -d "/sys/class/net/$IFACE/queues" ]; then
     
     # 设置RPS/XPS
     for rx_queue in /sys/class/net/$IFACE/queues/rx-*/rps_cpus; do
-        echo $core_mask > $rx_queue 2>/dev/null || true
+        echo "$core_mask" > "$rx_queue" 2>/dev/null || true
     done
     for tx_queue in /sys/class/net/$IFACE/queues/tx-*/xps_cpus; do
-        echo $core_mask > $tx_queue 2>/dev/null || true
+        echo "$core_mask" > "$tx_queue" 2>/dev/null || true
     done
     
     # 设置RFS
     echo 32768 > /proc/sys/net/core/rps_sock_flow_entries 2>/dev/null || true
     for rx_queue in /sys/class/net/$IFACE/queues/rx-*/rps_flow_cnt; do
-        echo 4096 > $rx_queue 2>/dev/null || true
+        echo 4096 > "$rx_queue" 2>/dev/null || true
     done
 fi
 
 # 关闭流控
-ethtool -A $IFACE rx off tx off 2>/dev/null || true
+ethtool -A "$IFACE" rx off tx off 2>/dev/null || true
 EOF
 
     # 设置执行权限
