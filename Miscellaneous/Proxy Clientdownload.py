@@ -76,27 +76,27 @@ class ClientDownload:
                 'v': 'no',
                 'downloads': [
                     {
-                        'sourceName': 'v2rayNG_%tagName%_arm64-v8a.apk',
+                        'sourceName': 'v2rayNG_{{tagName}}_arm64-v8a.apk',
                         'saveName': 'v2rayng_arm64-v8a.apk',
                         'apkpureUrl': ''
                     },
                     {
-                        'sourceName': 'v2rayNG_%tagName%_armeabi-v7a.apk',
+                        'sourceName': 'v2rayNG_{{tagName}}_armeabi-v7a.apk',
                         'saveName': 'v2rayng_armeabi-v7a.apk',
                         'apkpureUrl': ''
                     },
                     {
-                        'sourceName': 'v2rayNG_%tagName%_x86.apk',
+                        'sourceName': 'v2rayNG_{{tagName}}_x86.apk',
                         'saveName': 'v2rayng_x86.apk',
                         'apkpureUrl': ''
                     },
                     {
-                        'sourceName': 'v2rayNG_%tagName%_x86_64.apk',
+                        'sourceName': 'v2rayNG_{{tagName}}_x86_64.apk',
                         'saveName': 'v2rayng_x86_64.apk',
                         'apkpureUrl': ''
                     },
                     {
-                        'sourceName': 'v2rayNG_%tagName%_universal.apk',
+                        'sourceName': 'v2rayNG_{{tagName}}_universal.apk',
                         'saveName': 'v2rayng_universal.apk',
                         'apkpureUrl': ''
                     }
@@ -110,7 +110,7 @@ class ClientDownload:
                 'v': 'no',
                 'downloads': [
                     {
-                        'sourceName': 'shadowsocksr-android-%tagName%.apk',
+                        'sourceName': 'shadowsocksr-android-{{tagName}}.apk',
                         'saveName': 'ssr-android.apk',
                         'apkpureUrl': ''
                     }
@@ -124,38 +124,76 @@ class ClientDownload:
                 'v': 'yes',
                 'downloads': [
                     {
-                        'sourceName': 'Clash.Verge_%tagName%_x64-setup.exe',
+                        'sourceName': 'Clash.Verge_{{tagName}}_x64-setup.exe',
                         'saveName': 'Clash.Verge_x64.exe',
                         'apkpureUrl': ''
                     },
                     {
-                        'sourceName': 'Clash.Verge_%tagName%_x86-setup.exe',
-                        'saveName': 'Clash.Verge_x86.exe',
-                        'apkpureUrl': ''
-                    },
-                    {
-                        'sourceName': 'Clash.Verge_%tagName%_arm64-setup.exe',
+                        'sourceName': 'Clash.Verge_{{tagName}}_arm64-setup.exe',
                         'saveName': 'Clash.Verge_arm64.exe',
                         'apkpureUrl': ''
                     },
                     {
-                        'sourceName': 'Clash.Verge_%tagName%_x64.dmg',
+                        'sourceName': 'Clash.Verge_{{tagName}}_x64.dmg',
                         'saveName': 'Clash.Verge_x64.dmg',
                         'apkpureUrl': ''
                     },
                     {
-                        'sourceName': 'Clash.Verge_%tagName%_aarch64.dmg',
+                        'sourceName': 'Clash.Verge_{{tagName}}_aarch64.dmg',
                         'saveName': 'Clash.Verge_aarch64.dmg',
                         'apkpureUrl': ''
                     },
                     {
-                        'sourceName': 'clash-verge_%tagName%_amd64.deb',
+                        'sourceName': 'Clash.Verge_{{tagName}}_amd64.deb',
                         'saveName': 'Clash.Verge_amd64.deb',
+                        'apkpureUrl': ''
+                    }
+                ]
+            },
+            {
+                'name': 'FlClash',
+                'tagMethod': 'github_release',
+                'gitRepo': 'chen08209/FlClash',
+                'savePath': self.base_path,
+                'v': 'yes',
+                'downloads': [
+                    {
+                        'sourceName': 'FlClash-{{tagName}}-android-arm64-v8a.apk',
+                        'saveName': 'FlClash-android-arm64-v8.apk',
                         'apkpureUrl': ''
                     },
                     {
-                        'sourceName': 'clash-verge_%tagName%_i386.deb',
-                        'saveName': 'Clash.Verge_i386.deb',
+                        'sourceName': 'FlClash-{{tagName}}-android-armeabi-v7a.apk',
+                        'saveName': 'FlClash-android-armeabi-v7.apk',
+                        'apkpureUrl': ''
+                    },
+                    {
+                        'sourceName': 'FlClash-{{tagName}}-android-x86_64.apk',
+                        'saveName': 'FlClash-android-x64.apk',
+                        'apkpureUrl': ''
+                    }
+                ]
+            },
+            {
+                'name': 'ClashMetaForAndroid',
+                'tagMethod': 'github_release',
+                'gitRepo': 'MetaCubeX/ClashMetaForAndroid',
+                'savePath': self.base_path,
+                'v': 'yes',
+                'downloads': [
+                    {
+                        'sourceName': 'cmfa-{{tagName}}-meta-arm64-v8a-release.apk',
+                        'saveName': 'CMFA-android-arm64-v8.apk',
+                        'apkpureUrl': ''
+                    },
+                    {
+                        'sourceName': 'cmfa-{{tagName}}-meta-armeabi-v7a-release.apk',
+                        'saveName': 'CMFA-android-armeabi-v7.apk',
+                        'apkpureUrl': ''
+                    },
+                    {
+                        'sourceName': 'cmfa-{{tagName}}-meta-universal-release.apk',
+                        'saveName': 'CMFA-android-universal-release.apk',
                         'apkpureUrl': ''
                     }
                 ]
@@ -262,7 +300,7 @@ class ClientDownload:
 
         # 下载每个文件
         for download in task['downloads']:
-            source_name = download['sourceName'].replace('%tagName%', tag_name)
+            source_name = download['sourceName'].replace('{{tagName}}', tag_name)
             file_name = download['saveName'] or source_name
             download_url = f"https://github.com/{task['gitRepo']}/releases/download/{download_tag}/{source_name}"
             

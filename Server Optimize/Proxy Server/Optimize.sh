@@ -6,158 +6,170 @@ set -euo pipefail
 # 定义日志文件
 LOG_FILE="/var/log/server-optimization.log"
 BACKUP_DIR="/root/system_backup"
-NIC_CHECK_FILE="/var/log/network-check.log"
 
 # ipinfo.io API token
 IPINFO_TOKEN="替换为你的Token"
 
+# 定义全局变量
+declare release=""
+declare -i total_memory_mb=0
+declare -i cpu_cores=0
+declare -i cpu_threads=0
+
 # 定义颜色输出
-echo=echo
-for cmd in echo /bin/echo; do
-    $cmd >/dev/null 2>&1 || continue
-    if ! $cmd -e "" | grep -qE '^-e'; then
-        echo=$cmd
-        break
-    fi
-done
-CSI=$($echo -e "\033[")
+CSI="\033["
 CEND="${CSI}0m"
-CDGREEN="${CSI}32m"
 CRED="${CSI}1;31m"
 CGREEN="${CSI}1;32m"
 CYELLOW="${CSI}1;33m"
-CBLUE="${CSI}1;34m"
-CMAGENTA="${CSI}1;35m"
 CCYAN="${CSI}1;36m"
 
 # 输出函数
-OUT_ALERT() { echo -e "${CYELLOW} $1 ${CEND}" | tee -a "$LOG_FILE"; }
-OUT_ERROR() { echo -e "${CRED} $1 ${CEND}" | tee -a "$LOG_FILE"; }
-OUT_INFO() { echo -e "${CCYAN} $1 ${CEND}" | tee -a "$LOG_FILE"; }
-OUT_SUCCESS() { echo -e "${CGREEN} $1 ${CEND}" | tee -a "$LOG_FILE"; }
+OUT_ALERT() { echo -e "${CYELLOW}$1${CEND}" | tee -a "${LOG_FILE}"; }
+OUT_ERROR() { echo -e "${CRED}$1${CEND}" | tee -a "${LOG_FILE}"; }
+OUT_INFO() { echo -e "${CCYAN}$1${CEND}" | tee -a "${LOG_FILE}"; }
+OUT_SUCCESS() { echo -e "${CGREEN}$1${CEND}" | tee -a "${LOG_FILE}"; }
 
 # 检查是否在中国
-check_location() {
+check_location() { 
     OUT_INFO "[信息] 正在检查服务器位置..."
     
-    # 使用ipinfo.io API获取位置信息
-    local location_info
-    location_info=$(curl -s "https://ipinfo.io?token=${IPINFO_TOKEN}")
-    
-    if [ $? -ne 0 ]; then
+    if ! location_info=$(curl -s "https://ipinfo.io?token=${IPINFO_TOKEN}"); then
         OUT_ERROR "[错误] 无法获取位置信息，默认使用国际配置"
         echo "false"
-        return
+        return 1
     fi
     
     local country
-    country=$(echo "$location_info" | grep -o '"country": "[^"]*' | cut -d'"' -f4)
+    country=$(echo "${location_info}" | grep -o '"country": "[^"]*' | cut -d'"' -f4)
     
-    if [ "$country" == "CN" ]; then
+    if [ "${country}" = "CN" ]; then
         OUT_INFO "[信息] 检测到服务器位于中国"
         echo "true"
     else
-        OUT_INFO "[信息] 检测到服务器位于海外：$country"
+        OUT_INFO "[信息] 检测到服务器位于海外：${country}"
         echo "false"
     fi
 }
 
 # 检查root权限
-check_root() {
-    if [[ $EUID -ne 0 ]]; then
+check_root() { 
+    if [ $EUID -ne 0 ]; then
         OUT_ERROR "[错误] 此脚本需要root权限运行"
-        exit 1
+        return 1
     fi
 }
 
 # 检测系统类型
-check_system() {
-    if [[ -f /etc/redhat-release ]]; then
+check_system() { 
+    if [ -f /etc/redhat-release ]; then
         release="centos"
-    elif cat /etc/issue | grep -q -E -i "debian|raspbian"; then
-        release="debian"
-    elif cat /etc/issue | grep -q -E -i "ubuntu"; then
-        release="ubuntu"
-    elif cat /etc/issue | grep -q -E -i "centos|red hat|redhat"; then
-        release="centos"
-    elif cat /proc/version | grep -q -E -i "raspbian|debian"; then
-        release="debian"
-    elif cat /proc/version | grep -q -E -i "ubuntu"; then
-        release="ubuntu"
-    elif cat /proc/version | grep -q -E -i "centos|red hat|redhat"; then
-        release="centos"
-    else
-        OUT_ERROR "[错误] 不支持的操作系统！"
-        exit 1
+        return 0
     fi
+    
+    if grep -qi "debian|raspbian" /etc/issue; then
+        release="debian"
+        return 0
+    fi
+    
+    if grep -qi "ubuntu" /etc/issue; then
+        release="ubuntu"
+        return 0
+    fi
+    
+    if grep -qi "centos|red hat|redhat" /etc/issue; then
+        release="centos"
+        return 0
+    fi
+    
+    if grep -qi "debian|raspbian" /proc/version; then
+        release="debian"
+        return 0
+    fi
+    
+    if grep -qi "ubuntu" /proc/version; then
+        release="ubuntu"
+        return 0
+    fi
+    
+    if grep -qi "centos|red hat|redhat" /proc/version; then
+        release="centos"
+        return 0
+    fi
+    
+    OUT_ERROR "[错误] 不支持的操作系统！"
+    return 1
 }
 
-# 检查虚拟化环境
-check_virtualization() {
-    OUT_INFO "[信息] 检查虚拟化环境..."
+# 检测CPU配置
+detect_cpu() {
+    OUT_INFO "[信息] 检测CPU配置..."
     
-    is_vm=0
-    virt_type="none"
+    # 获取CPU核心数
+    cpu_cores=$(nproc --all)
     
-    # 检查常见虚拟化标志
-    if systemd-detect-virt &>/dev/null; then
-        virt_type=$(systemd-detect-virt)
-        is_vm=1
-    elif [ -f "/sys/hypervisor/type" ]; then
-        virt_type=$(cat /sys/hypervisor/type)
-        is_vm=1
-    elif dmesg | grep -i "vmware\|kvm\|qemu\|virtio\|xen\|hyper-v" &>/dev/null; then
-        if dmesg | grep -i "vmware" &>/dev/null; then
-            virt_type="vmware"
-        elif dmesg | grep -i "kvm\|qemu\|virtio" &>/dev/null; then
-            virt_type="kvm"
-        elif dmesg | grep -i "xen" &>/dev/null; then
-            virt_type="xen"
-        elif dmesg | grep -i "hyper-v" &>/dev/null; then
-            virt_type="hyper-v"
-        fi
-        is_vm=1
-    fi
-
-    if [ $is_vm -eq 1 ]; then
-        OUT_INFO "[信息] 检测到虚拟化环境: $virt_type"
+    # 获取CPU线程数
+    if [ -f /proc/cpuinfo ]; then
+        cpu_threads=$(grep -c processor /proc/cpuinfo)
     else
-        OUT_INFO "[信息] 检测到物理机环境"
+        cpu_threads=$cpu_cores
     fi
+    
+    # 获取CPU型号
+    local cpu_model
+    cpu_model=$(grep "model name" /proc/cpuinfo | head -n1 | cut -d':' -f2 | tr -s ' ')
+    
+    OUT_INFO "[信息] CPU型号: ${cpu_model}"
+    OUT_INFO "[信息] CPU核心数: ${cpu_cores}"
+    OUT_INFO "[信息] CPU线程数: ${cpu_threads}"
 }
 
-# 检查网卡类型
-check_nic_type() {
-    local interface="$1"
-    local is_virtio=0
+# 检测内存配置
+detect_memory() {
+    OUT_INFO "[信息] 检测内存配置..."
     
-    # 检查是否为virtio网卡
-    if ethtool -i "$interface" 2>/dev/null | grep -q "driver: virtio"; then
-        is_virtio=1
-    elif lspci | grep -i "virtio" | grep -i "network" &>/dev/null; then
-        is_virtio=1
-    elif dmesg | grep -i "virtio.*network" | grep -q "$interface" &>/dev/null; then
-        is_virtio=1
+    # 获取总内存(MB)
+    if [ -f /proc/meminfo ]; then
+        total_memory_mb=$(grep MemTotal /proc/meminfo | awk '{print int($2/1024)}')
+    else
+        OUT_ERROR "[错误] 无法检测内存大小"
+        return 1
     fi
     
-    echo "$is_virtio"
+    OUT_INFO "[信息] 总内存: ${total_memory_mb}MB"
 }
 
 # 安装必要工具
-install_requirements() {
+install_requirements() { 
     OUT_INFO "[信息] 安装必要工具..."
-    if [[ ${release} == "centos" ]]; then
-        yum install -y epel-release
-        yum install -y ethtool wget net-tools curl chrony
+    
+    if [ "${release}" = "centos" ]; then
+        if ! yum install -y epel-release; then
+            OUT_ERROR "[错误] 安装 epel-release 失败"
+            return 1
+        fi
+        
+        if ! yum install -y wget curl chrony; then
+            OUT_ERROR "[错误] 安装必要工具失败"
+            return 1
+        fi
     else
-        apt-get update
-        apt-get install -y ethtool wget net-tools curl chrony
+        if ! apt-get update; then
+            OUT_ERROR "[错误] 更新软件源失败"
+            return 1
+        fi
+        
+        if ! apt-get install -y wget curl chrony; then
+            OUT_ERROR "[错误] 安装必要工具失败"
+            return 1
+        fi
     fi
+    
     OUT_SUCCESS "[成功] 工具安装完成"
+    return 0
 }
-
-# 配置DNS - 自动根据位置选择DNS服务器
-configure_dns() {
+# 配置DNS
+configure_dns() { 
     OUT_INFO "配置系统DNS..."
     
     # 获取位置信息
@@ -165,58 +177,72 @@ configure_dns() {
     is_in_china=$(check_location)
 
     # 确保备份目录存在
-    if [[ ! -d "${BACKUP_DIR}" ]]; then
-        mkdir -p "${BACKUP_DIR}" || {
+    if [ ! -d "${BACKUP_DIR}" ]; then
+        if ! mkdir -p "${BACKUP_DIR}"; then
             OUT_ERROR "无法创建备份目录：${BACKUP_DIR}"
-            exit 1
-        }
+            return 1
+        fi
     fi
 
     # 检查并移除符号链接或不可修改属性
-    if [[ -L /etc/resolv.conf ]]; then
-        rm -f /etc/resolv.conf
-    elif [[ -f /etc/resolv.conf ]]; then
+    if [ -L /etc/resolv.conf ]; then
+        if ! rm -f /etc/resolv.conf; then
+            OUT_ERROR "无法删除 resolv.conf 符号链接"
+            return 1
+        fi
+    fi
+    
+    if [ -f /etc/resolv.conf ]; then
         chattr -i /etc/resolv.conf 2>/dev/null || true
-        mv /etc/resolv.conf "${BACKUP_DIR}/resolv.conf.bak" || {
+        if ! mv /etc/resolv.conf "${BACKUP_DIR}/resolv.conf.bak"; then
             OUT_ERROR "无法备份 /etc/resolv.conf 文件"
-            exit 1
-        }
+            return 1
+        fi
     fi
 
     # 写入新的 DNS 配置
-    if [[ "${is_in_china}" == "true" ]]; then
+    if [ "${is_in_china}" = "true" ]; then
         # 国内DNS配置
-        cat > /etc/resolv.conf << EOF
+        if ! cat > /etc/resolv.conf << 'EOF'
 options timeout:2 attempts:3 rotate
 nameserver 223.5.5.5
 nameserver 223.6.6.6
 nameserver 119.29.29.29
 nameserver 180.76.76.76
 EOF
+        then
+            OUT_ERROR "无法写入DNS配置"
+            return 1
+        fi
         OUT_INFO "已配置国内DNS"
     else
         # 国外DNS配置
-        cat > /etc/resolv.conf << EOF
+        if ! cat > /etc/resolv.conf << 'EOF'
 options timeout:2 attempts:3 rotate
 nameserver 1.1.1.1
 nameserver 8.8.8.8
 nameserver 9.9.9.9
 nameserver 208.67.222.222
 EOF
+        then
+            OUT_ERROR "无法写入DNS配置"
+            return 1
+        fi
         OUT_INFO "已配置国际DNS"
     fi
 
     # 设置文件为不可修改
-    chattr +i /etc/resolv.conf || {
+    if ! chattr +i /etc/resolv.conf; then
         OUT_ERROR "无法设置 /etc/resolv.conf 为只读"
-        exit 1
-    }
+        return 1
+    fi
 
     OUT_SUCCESS "DNS配置完成"
+    return 0
 }
 
-# 配置NTP - 自动根据位置选择NTP服务器
-configure_ntp() {
+# 配置NTP
+configure_ntp() { 
     OUT_INFO "配置NTP时间同步..."
     
     # 获取位置信息
@@ -226,9 +252,9 @@ configure_ntp() {
     # 使用真实服务名称 chrony.service
     NTP_SERVICE="chrony.service"
 
-    if [[ "${is_in_china}" == "true" ]]; then
+    if [ "${is_in_china}" = "true" ]; then
         # 国内NTP配置
-        cat > /etc/chrony.conf << EOF
+        if ! cat > /etc/chrony.conf << 'EOF'
 server ntp.aliyun.com iburst
 server cn.ntp.org.cn iburst
 server ntp.tencent.com iburst
@@ -237,10 +263,14 @@ makestep 1.0 3
 rtcsync
 logdir /var/log/chrony
 EOF
+        then
+            OUT_ERROR "无法写入 chrony 配置文件"
+            return 1
+        fi
         OUT_INFO "已配置国内NTP服务器"
     else
         # 国外NTP配置
-        cat > /etc/chrony.conf << EOF
+        if ! cat > /etc/chrony.conf << 'EOF'
 pool pool.ntp.org iburst
 pool time.google.com iburst
 pool time.cloudflare.com iburst
@@ -249,178 +279,123 @@ makestep 1.0 3
 rtcsync
 logdir /var/log/chrony
 EOF
+        then
+            OUT_ERROR "无法写入 chrony 配置文件"
+            return 1
+        fi
         OUT_INFO "已配置国际NTP服务器"
     fi
 
     # 启用并重启服务
-    systemctl enable "${NTP_SERVICE}" || {
+    if ! systemctl enable "${NTP_SERVICE}"; then
         OUT_ERROR "无法启用 NTP 服务：${NTP_SERVICE}"
-        exit 1
-    }
-    systemctl restart "${NTP_SERVICE}" || {
+        return 1
+    fi
+    
+    if ! systemctl restart "${NTP_SERVICE}"; then
         OUT_ERROR "无法重启 NTP 服务：${NTP_SERVICE}"
-        exit 1
-    }
+        return 1
+    fi
 
     OUT_SUCCESS "NTP配置完成"
+    return 0
 }
-
-# 网卡特性和兼容性检查
-declare -A NIC_FEATURES
-check_nic_compatibility() {
-    local interface="$1"
-    OUT_INFO "[信息] 检查网卡 $interface 的特性支持情况..."
+# 根据硬件配置生成优化参数
+generate_optimization_params() {
+    local mem_gb=$((total_memory_mb/1024))
+    local params=""
     
-    # 获取网卡基本信息
-    local driver
-    local version
-    local firmware
-    
-    driver=$(ethtool -i "$interface" 2>/dev/null | grep "^driver:" | cut -d: -f2 | tr -d ' ')
-    version=$(ethtool -i "$interface" 2>/dev/null | grep "^version:" | cut -d: -f2 | tr -d ' ')
-    firmware=$(ethtool -i "$interface" 2>/dev/null | grep "^firmware-version:" | cut -d: -f2 | tr -d ' ')
-    
-    OUT_INFO "网卡信息: 驱动=$driver, 版本=$version, 固件=$firmware"
-    
-    # 检查各项特性支持
-    local features=""
-    
-    # 检查TSO支持
-    if ethtool -k "$interface" 2>/dev/null | grep -q "tcp-segmentation-offload: on"; then
-        features+="tso "
-        NIC_FEATURES[$interface]+="tso "
+    # 如果无法检测到CPU或内存，使用保守配置
+    if [ $total_memory_mb -eq 0 ] || [ $cpu_cores -eq 0 ]; then
+        OUT_ALERT "[警告] 无法检测硬件配置，使用保守参数配置"
+        params="net.ipv4.tcp_mem = 98304 131072 196608
+net.ipv4.tcp_rmem = 4096 87380 16777216
+net.ipv4.tcp_wmem = 4096 87380 16777216
+net.core.rmem_max = 16777216
+net.core.wmem_max = 16777216
+net.core.rmem_default = 262144
+net.core.wmem_default = 262144
+net.core.netdev_max_backlog = 5000
+net.core.somaxconn = 1024"
+        echo "${params}"
+        return 0
     fi
     
-    # 检查GSO支持
-    if ethtool -k "$interface" 2>/dev/null | grep -q "generic-segmentation-offload: on"; then
-        features+="gso "
-        NIC_FEATURES[$interface]+="gso "
-    fi
-    
-    # 检查GRO支持
-    if ethtool -k "$interface" 2>/dev/null | grep -q "generic-receive-offload: on"; then
-        features+="gro "
-        NIC_FEATURES[$interface]+="gro "
-    fi
-    
-    # 检查队列大小调整支持
-    if ethtool -g "$interface" &>/dev/null; then
-        features+="queue "
-        NIC_FEATURES[$interface]+="queue "
-    fi
-    
-    # 检查中断合并支持
-    if ethtool -c "$interface" &>/dev/null; then
-        features+="coalesce "
-        NIC_FEATURES[$interface]+="coalesce "
-    fi
-    
-    # 输出支持的特性
-    OUT_INFO "支持的特性: $features"
-    
-    # 检查是否是较新的网卡
-    local is_modern=0
-    if [[ $features == *"tso"* && $features == *"gso"* && $features == *"gro"* ]]; then
-        is_modern=1
-        OUT_INFO "检测结果: 现代网卡，支持完整优化"
+    # TCP内存相关参数（基于总内存）
+    if [ $mem_gb -le 4 ]; then
+        # 4GB及以下内存
+        params="net.ipv4.tcp_mem = 131072 196608 262144
+net.ipv4.tcp_rmem = 4096 131072 33554432
+net.ipv4.tcp_wmem = 4096 131072 33554432
+net.core.rmem_max = 33554432
+net.core.wmem_max = 33554432
+net.core.rmem_default = 524288
+net.core.wmem_default = 524288"
+    elif [ $mem_gb -le 16 ]; then
+        # 8-16GB内存
+        params="net.ipv4.tcp_mem = 1048576 1572864 2097152
+net.ipv4.tcp_rmem = 4096 262144 67108864
+net.ipv4.tcp_wmem = 4096 262144 67108864
+net.core.rmem_max = 67108864
+net.core.wmem_max = 67108864
+net.core.rmem_default = 1048576
+net.core.wmem_default = 1048576"
     else
-        OUT_INFO "检测结果: 较老的网卡，将使用基础优化"
+        # 32GB以上内存
+        params="net.ipv4.tcp_mem = 2097152 3145728 4194304
+net.ipv4.tcp_rmem = 4096 524288 134217728
+net.ipv4.tcp_wmem = 4096 524288 134217728
+net.core.rmem_max = 134217728
+net.core.wmem_max = 134217728
+net.core.rmem_default = 2097152
+net.core.wmem_default = 2097152"
     fi
     
-    # 返回是否是现代网卡
-    echo "$is_modern"
-}
-
-# 创建开机自动执行的网卡优化脚本
-optimize_network() {
-    OUT_INFO "[信息] 配置网卡优化..."
-    
-    # 创建网卡优化脚本目录（如果不存在）
-    mkdir -p /etc/network/if-up.d/
-    
-    # 创建网卡优化脚本
-    cat > /etc/network/if-up.d/network-optimize << 'EOF'
-#!/bin/bash
-
-# 只在网卡启动时执行优化
-[ "$IFACE" = lo ] && exit 0
-[ "$MODE" != start ] && exit 0
-
-# 获取网卡类型
-is_virtio=0
-if ethtool -i "$IFACE" 2>/dev/null | grep -q "driver: virtio"; then
-    is_virtio=1
-fi
-
-# 基础优化
-ethtool -K "$IFACE" rx-checksumming on 2>/dev/null || true
-ethtool -K "$IFACE" tx-checksumming on 2>/dev/null || true
-ethtool -K "$IFACE" scatter-gather on 2>/dev/null || true
-
-if [ $is_virtio -eq 1 ]; then
-    # virtio网卡优化
-    ethtool -K "$IFACE" gso off 2>/dev/null || true
-    ethtool -K "$IFACE" tso off 2>/dev/null || true
-    ethtool -K "$IFACE" gro off 2>/dev/null || true
-    ethtool -C "$IFACE" rx-usecs 50 tx-usecs 50 2>/dev/null || true
-else
-    # 物理网卡优化
-    if ethtool -k "$IFACE" | grep -q "tcp-segmentation-offload: on"; then
-        ethtool -K "$IFACE" tso on 2>/dev/null || true
-        ethtool -K "$IFACE" gso on 2>/dev/null || true
+    # CPU相关参数
+    if [ $cpu_cores -le 2 ]; then
+        # 低性能CPU
+        params="${params}
+net.core.netdev_max_backlog = 10000
+net.core.somaxconn = 2048"
+    elif [ $cpu_cores -le 4 ]; then
+        # 中等性能CPU
+        params="${params}
+net.core.netdev_max_backlog = 30000
+net.core.somaxconn = 8192"
+    else
+        # 高性能CPU
+        params="${params}
+net.core.netdev_max_backlog = 100000
+net.core.somaxconn = 65535"
     fi
-    ethtool -K "$IFACE" gro off 2>/dev/null || true
-    ethtool -G "$IFACE" rx 4096 tx 4096 2>/dev/null || true
-    ethtool -C "$IFACE" adaptive-rx off adaptive-tx off \
-            rx-usecs 100 tx-usecs 100 \
-            rx-frames 64 tx-frames 64 2>/dev/null || true
-fi
-
-# CPU亲和性优化
-if [ -d "/sys/class/net/$IFACE/queues" ]; then
-    num_cores=$(nproc)
-    core_mask=0
-    for ((i=0; i<num_cores; i++)); do
-        core_mask=$((core_mask | (1<<i)))
-    done
-    core_mask=$(printf "%x" $core_mask)
     
-    # 设置RPS/XPS
-    for rx_queue in /sys/class/net/$IFACE/queues/rx-*/rps_cpus; do
-        echo "$core_mask" > "$rx_queue" 2>/dev/null || true
-    done
-    for tx_queue in /sys/class/net/$IFACE/queues/tx-*/xps_cpus; do
-        echo "$core_mask" > "$tx_queue" 2>/dev/null || true
-    done
-    
-    # 设置RFS
-    echo 32768 > /proc/sys/net/core/rps_sock_flow_entries 2>/dev/null || true
-    for rx_queue in /sys/class/net/$IFACE/queues/rx-*/rps_flow_cnt; do
-        echo 4096 > "$rx_queue" 2>/dev/null || true
-    done
-fi
-
-# 关闭流控
-ethtool -A "$IFACE" rx off tx off 2>/dev/null || true
-EOF
-
-    # 设置执行权限
-    chmod +x /etc/network/if-up.d/network-optimize
-    
-    # 立即对当前网卡执行优化
-    for interface in $(ls /sys/class/net/ | grep -v '^lo$'); do
-        IFACE=$interface MODE=start /etc/network/if-up.d/network-optimize
-    done
-    
-    OUT_SUCCESS "[成功] 网卡优化配置完成"
+    echo "${params}"
+    return 0
 }
 
 # 系统参数优化
-optimize_system() {
+optimize_system() { 
     OUT_INFO "[信息] 优化系统参数..."
     
+    # 检测硬件配置
+    if ! detect_cpu || ! detect_memory; then
+        OUT_ERROR "[错误] 硬件检测失败"
+        return 1
+    fi
+    
+    # 备份原始配置
+    if [ -f /etc/sysctl.conf ] && \
+       ! cp -f /etc/sysctl.conf "${BACKUP_DIR}/sysctl.conf.bak"; then
+        OUT_ERROR "[错误] 无法备份sysctl.conf"
+        return 1
+    fi
+    
+    # 获取优化参数
+    local optimization_params
+    optimization_params=$(generate_optimization_params)
+    
     # 配置sysctl参数
-    cat > /etc/sysctl.conf << 'EOF'
+    if ! cat > /etc/sysctl.conf << EOF
 # 基础网络参数
 net.ipv4.ip_forward = 1
 net.ipv4.tcp_syncookies = 1
@@ -435,16 +410,8 @@ net.ipv4.tcp_max_syn_backlog = 30000
 net.ipv4.tcp_mtu_probing = 1
 net.ipv4.tcp_fastopen = 3
 
-# TCP内存设置
-net.ipv4.tcp_mem = 786432 1048576 1572864
-net.ipv4.tcp_rmem = 4096 87380 33554432
-net.ipv4.tcp_wmem = 4096 87380 33554432
-net.core.rmem_max = 33554432
-net.core.wmem_max = 33554432
-net.core.rmem_default = 1048576
-net.core.wmem_default = 1048576
-net.core.netdev_max_backlog = 50000
-net.core.somaxconn = 65535
+# 动态生成的优化参数
+${optimization_params}
 
 # TCP拥塞控制
 net.ipv4.tcp_congestion_control = bbr
@@ -475,9 +442,19 @@ vm.min_free_kbytes = 65536
 vm.overcommit_memory = 1
 vm.max_map_count = 262144
 EOF
+    then
+        OUT_ERROR "[错误] 无法写入sysctl配置"
+        return 1
+    fi
 
-    # 配置系统限制 - 更高的限制
-    cat > /etc/security/limits.conf << 'EOF'
+    # 备份并配置系统限制
+    if [ -f /etc/security/limits.conf ] && \
+       ! cp -f /etc/security/limits.conf "${BACKUP_DIR}/limits.conf.bak"; then
+        OUT_ERROR "[错误] 无法备份limits.conf"
+        return 1
+    fi
+    
+    if ! cat > /etc/security/limits.conf << 'EOF'
 * soft nofile 2097152
 * hard nofile 2097152
 * soft nproc 2097152
@@ -489,36 +466,73 @@ root hard nproc 2097152
 * soft memlock unlimited
 * hard memlock unlimited
 EOF
+    then
+        OUT_ERROR "[错误] 无法写入limits配置"
+        return 1
+    fi
     
     # 确保PAM加载limits配置
-    if [[ -f /etc/pam.d/common-session ]]; then
-        grep -q '^session.*pam_limits.so$' /etc/pam.d/common-session || \
-        echo "session required pam_limits.so" >> /etc/pam.d/common-session
+    if [ -f /etc/pam.d/common-session ]; then
+        if ! grep -q '^session.*pam_limits.so$' /etc/pam.d/common-session; then
+            if ! echo "session required pam_limits.so" >> /etc/pam.d/common-session; then
+                OUT_ERROR "[错误] 无法配置PAM加载limits"
+                return 1
+            fi
+        fi
     fi
     
     # 应用sysctl参数
-    sysctl -p
+    if ! sysctl -p; then
+        OUT_ERROR "[错误] 应用sysctl参数失败"
+        return 1
+    fi
     
     OUT_SUCCESS "[成功] 系统参数优化完成"
+    return 0
 }
 
 # 主函数
-main() {
+main() { 
     OUT_INFO "[信息] 开始系统优化..."
     
+    # 创建备份目录
+    if ! mkdir -p "${BACKUP_DIR}"; then
+        OUT_ERROR "[错误] 无法创建备份目录"
+        exit 1
+    fi
+    
     # 基础检查
-    check_root
-    check_system
-    check_virtualization
-    install_requirements
+    if ! check_root; then
+        OUT_ERROR "[错误] Root 权限检查失败"
+        exit 1
+    fi
+    
+    if ! check_system; then
+        OUT_ERROR "[错误] 系统检查失败"
+        exit 1
+    fi
+    
+    if ! install_requirements; then
+        OUT_ERROR "[错误] 安装必要工具失败"
+        exit 1
+    fi
     
     # 系统配置
-    configure_dns
-    configure_ntp
+    if ! configure_dns; then
+        OUT_ERROR "[错误] DNS配置失败"
+        exit 1
+    fi
+    
+    if ! configure_ntp; then
+        OUT_ERROR "[错误] NTP配置失败"
+        exit 1
+    fi
     
     # 性能优化
-    optimize_system
-    optimize_network
+    if ! optimize_system; then
+        OUT_ERROR "[错误] 系统参数优化失败"
+        exit 1
+    fi
     
     OUT_SUCCESS "[成功] 系统优化完成！"
     OUT_INFO "[信息] 建议重启系统使所有优化生效"
