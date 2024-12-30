@@ -7,9 +7,6 @@ set -euo pipefail
 LOG_FILE="/var/log/server-optimization.log"
 BACKUP_DIR="/root/system_backup"
 
-# ipinfo.io API token
-IPINFO_TOKEN="替换为你的Token"
-
 # 定义全局变量
 declare release=""
 declare -i total_memory_mb=0
@@ -34,7 +31,7 @@ OUT_SUCCESS() { echo -e "${CGREEN}$1${CEND}" | tee -a "${LOG_FILE}"; }
 check_location() { 
     OUT_INFO "[信息] 正在检查服务器位置..."
     
-    if ! location_info=$(curl -s "https://ipinfo.io?token=${IPINFO_TOKEN}"); then
+    if ! location_info=$(curl -s "https://ipinfo.io"); then
         OUT_ERROR "[错误] 无法获取位置信息，默认使用国际配置"
         echo "false"
         return 1
@@ -177,6 +174,7 @@ install_requirements() {
     OUT_SUCCESS "[成功] 工具安装完成"
     return 0
 }
+
 # 配置DNS
 configure_dns() { 
     OUT_INFO "配置系统DNS..."
@@ -309,6 +307,7 @@ EOF
     OUT_SUCCESS "NTP配置完成"
     return 0
 }
+
 # 根据硬件配置生成优化参数
 generate_optimization_params() {
     local mem_gb=$((total_memory_mb/1024))
@@ -483,6 +482,72 @@ EOF
     # 确保PAM加载limits配置
     if [ -f /etc/pam.d/common-session ]; then
         if ! grep -q '^session.*pam_limits.so$' /etc/pam.d/common-session; then
+            if ! echo "session required pam_limits.so" >> /etc/pam.d/common-session; then
+                OUT_ERROR "[错误] 无法配置PAM加载limits"
+                return 1
+            fi
+        fi
+    fi
+    
+    # 应用sysctl参数
+    if ! sysctl -p; then
+        OUT_ERROR "[错误] 应用sysctl参数失败"
+        return 1
+    fi
+    
+    OUT_SUCCESS "[成功] 系统参数优化完成"
+    return 0
+}
+
+# 主函数
+main() { 
+    OUT_INFO "[信息] 开始系统优化..."
+    
+    # 创建备份目录
+    if ! mkdir -p "${BACKUP_DIR}"; then
+        OUT_ERROR "[错误] 无法创建备份目录"
+        exit 1
+    fi
+    
+    # 基础检查
+    if ! check_root; then
+        OUT_ERROR "[错误] Root 权限检查失败"
+        exit 1
+    fi
+    
+    if ! check_system; then
+        OUT_ERROR "[错误] 系统检查失败"
+        exit 1
+    fi
+    
+    if ! install_requirements; then
+        OUT_ERROR "[错误] 安装必要工具失败"
+        exit 1
+    fi
+    
+    # 系统配置
+    if ! configure_dns; then
+        OUT_ERROR "[错误] DNS配置失败"
+        exit 1
+    fi
+    
+    if ! configure_ntp; then
+        OUT_ERROR "[错误] NTP配置失败"
+        exit 1
+    fi
+    
+    # 性能优化
+    if ! optimize_system; then
+        OUT_ERROR "[错误] 系统参数优化失败"
+        exit 1
+    fi
+    
+    OUT_SUCCESS "[成功] 系统优化完成！"
+    OUT_INFO "[信息] 建议重启系统使所有优化生效"
+}
+
+# 运行主函数
+main /etc/pam.d/common-session; then
             if ! echo "session required pam_limits.so" >> /etc/pam.d/common-session; then
                 OUT_ERROR "[错误] 无法配置PAM加载limits"
                 return 1
