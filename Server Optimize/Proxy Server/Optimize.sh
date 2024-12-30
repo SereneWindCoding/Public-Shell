@@ -105,14 +105,23 @@ check_system() {
 detect_cpu() {
     OUT_INFO "[信息] 检测CPU配置..."
     
-    # 获取CPU核心数
-    cpu_cores=$(nproc --all)
+    if [ ! -f /proc/cpuinfo ]; then
+        OUT_ERROR "[错误] 无法访问 /proc/cpuinfo"
+        return 1
+    fi
     
-    # 获取CPU线程数
-    if [ -f /proc/cpuinfo ]; then
+    # 获取物理核心数（cpu cores）
+    cpu_cores=$(grep "cpu cores" /proc/cpuinfo | uniq | awk '{print $4}')
+    if [ -z "$cpu_cores" ]; then
+        OUT_ERROR "[错误] 无法获取CPU核心数"
+        return 1
+    fi
+    
+    # 获取线程数（siblings）
+    cpu_threads=$(grep "siblings" /proc/cpuinfo | uniq | awk '{print $3}')
+    if [ -z "$cpu_threads" ]; then
+        # 如果无法获取线程数，则回退到处理器数量
         cpu_threads=$(grep -c processor /proc/cpuinfo)
-    else
-        cpu_threads=$cpu_cores
     fi
     
     # 获取CPU型号
@@ -120,8 +129,8 @@ detect_cpu() {
     cpu_model=$(grep "model name" /proc/cpuinfo | head -n1 | cut -d':' -f2 | tr -s ' ')
     
     OUT_INFO "[信息] CPU型号: ${cpu_model}"
-    OUT_INFO "[信息] CPU核心数: ${cpu_cores}"
-    OUT_INFO "[信息] CPU线程数: ${cpu_threads}"
+    OUT_INFO "[信息] CPU物理核心数: ${cpu_cores}"
+    OUT_INFO "[信息] CPU逻辑核心数: ${cpu_threads}"
 }
 
 # 检测内存配置
