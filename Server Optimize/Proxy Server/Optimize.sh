@@ -56,6 +56,7 @@ check_root() {
         return 1
     fi
 }
+
 # 检测系统类型
 check_system() { 
     # 首先检查是否存在 /etc/os-release 文件
@@ -184,7 +185,6 @@ install_requirements() {
     OUT_SUCCESS "[成功] 工具安装完成"
     return 0
 }
-
 # 配置DNS
 configure_dns() { 
     OUT_INFO "配置系统DNS..."
@@ -216,6 +216,7 @@ configure_dns() {
             return 1
         fi
     fi
+
     # 写入新的 DNS 配置
     if [ "${is_in_china}" = "true" ]; then
         # 国内DNS配置
