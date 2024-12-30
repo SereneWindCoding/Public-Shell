@@ -56,15 +56,36 @@ check_root() {
         return 1
     fi
 }
-
 # 检测系统类型
 check_system() { 
+    # 首先检查是否存在 /etc/os-release 文件
+    if [ -f /etc/os-release ]; then
+        source /etc/os-release
+        if echo "${ID}" | grep -qi "debian"; then
+            release="debian"
+            return 0
+        elif echo "${ID}" | grep -qi "ubuntu"; then
+            release="ubuntu"
+            return 0
+        elif echo "${ID}" | grep -qi "centos|rhel|fedora"; then
+            release="centos"
+            return 0
+        fi
+    fi
+    
+    # 如果无法从 os-release 确定，使用传统方法
     if [ -f /etc/redhat-release ]; then
         release="centos"
         return 0
     fi
     
-    if grep -qi "debian|raspbian" /etc/issue; then
+    if [ -f /etc/debian_version ]; then
+        release="debian"
+        return 0
+    fi
+    
+    # 使用 issue 文件作为后备
+    if grep -qi "debian" /etc/issue; then
         release="debian"
         return 0
     fi
@@ -79,22 +100,11 @@ check_system() {
         return 0
     fi
     
-    if grep -qi "debian|raspbian" /proc/version; then
-        release="debian"
-        return 0
-    fi
-    
-    if grep -qi "ubuntu" /proc/version; then
-        release="ubuntu"
-        return 0
-    fi
-    
-    if grep -qi "centos|red hat|redhat" /proc/version; then
-        release="centos"
-        return 0
-    fi
-    
     OUT_ERROR "[错误] 不支持的操作系统！"
+    OUT_INFO "系统信息："
+    if [ -f /etc/os-release ]; then
+        cat /etc/os-release
+    fi
     return 1
 }
 
@@ -206,7 +216,6 @@ configure_dns() {
             return 1
         fi
     fi
-
     # 写入新的 DNS 配置
     if [ "${is_in_china}" = "true" ]; then
         # 国内DNS配置
@@ -307,7 +316,6 @@ EOF
     OUT_SUCCESS "NTP配置完成"
     return 0
 }
-
 # 根据硬件配置生成优化参数
 generate_optimization_params() {
     local mem_gb=$((total_memory_mb/1024))
@@ -482,72 +490,6 @@ EOF
     # 确保PAM加载limits配置
     if [ -f /etc/pam.d/common-session ]; then
         if ! grep -q '^session.*pam_limits.so$' /etc/pam.d/common-session; then
-            if ! echo "session required pam_limits.so" >> /etc/pam.d/common-session; then
-                OUT_ERROR "[错误] 无法配置PAM加载limits"
-                return 1
-            fi
-        fi
-    fi
-    
-    # 应用sysctl参数
-    if ! sysctl -p; then
-        OUT_ERROR "[错误] 应用sysctl参数失败"
-        return 1
-    fi
-    
-    OUT_SUCCESS "[成功] 系统参数优化完成"
-    return 0
-}
-
-# 主函数
-main() { 
-    OUT_INFO "[信息] 开始系统优化..."
-    
-    # 创建备份目录
-    if ! mkdir -p "${BACKUP_DIR}"; then
-        OUT_ERROR "[错误] 无法创建备份目录"
-        exit 1
-    fi
-    
-    # 基础检查
-    if ! check_root; then
-        OUT_ERROR "[错误] Root 权限检查失败"
-        exit 1
-    fi
-    
-    if ! check_system; then
-        OUT_ERROR "[错误] 系统检查失败"
-        exit 1
-    fi
-    
-    if ! install_requirements; then
-        OUT_ERROR "[错误] 安装必要工具失败"
-        exit 1
-    fi
-    
-    # 系统配置
-    if ! configure_dns; then
-        OUT_ERROR "[错误] DNS配置失败"
-        exit 1
-    fi
-    
-    if ! configure_ntp; then
-        OUT_ERROR "[错误] NTP配置失败"
-        exit 1
-    fi
-    
-    # 性能优化
-    if ! optimize_system; then
-        OUT_ERROR "[错误] 系统参数优化失败"
-        exit 1
-    fi
-    
-    OUT_SUCCESS "[成功] 系统优化完成！"
-    OUT_INFO "[信息] 建议重启系统使所有优化生效"
-}
-
-# 运行主函数
-main /etc/pam.d/common-session; then
             if ! echo "session required pam_limits.so" >> /etc/pam.d/common-session; then
                 OUT_ERROR "[错误] 无法配置PAM加载limits"
                 return 1
