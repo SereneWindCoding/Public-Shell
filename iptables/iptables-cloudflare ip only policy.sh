@@ -139,17 +139,13 @@ configure_firewall() {
     mkdir -p /etc/iptables/backup
     iptables-save > /etc/iptables/backup/rules.v4.$(date +%Y%m%d_%H%M%S)
     ip6tables-save > /etc/iptables/backup/rules.v6.$(date +%Y%m%d_%H%M%S)
-    
+
     echo -e "${YELLOW}配置 IPv4 规则...${NC}"
     
-    # 删除可能存在的旧的 80,443 端口规则
-    while iptables -D INPUT -p tcp -m multiport --dports 80,443 -j DROP 2>/dev/null; do :; done
-    iptables_tmp=$(mktemp)
-    iptables-save | grep -v "multiport dports 80,443" > "$iptables_tmp"
-    iptables-restore < "$iptables_tmp"
-    rm -f "$iptables_tmp"
+    # 完全删除所有 web 端口相关规则
+    iptables-save | grep -v "multiport dports 80,443" | iptables-restore
     
-    # 允许Cloudflare IPv4访问 web 端口
+    # 允许 Cloudflare IPv4 访问 web 端口
     while IFS= read -r ip; do
         [[ -n "$ip" ]] && iptables -I INPUT -s "$ip" -p tcp -m multiport --dports 80,443 -j ACCEPT
     done < /tmp/cf_ipv4.txt
@@ -157,18 +153,14 @@ configure_firewall() {
     # 添加阻止规则
     iptables -A INPUT -p tcp -m multiport --dports 80,443 -j DROP
     
-    # 如果有IPv6支持，配置IPv6规则
+    # 如果有 IPv6 支持，配置 IPv6 规则
     if [ -f /proc/net/if_inet6 ]; then
         echo -e "${YELLOW}配置 IPv6 规则...${NC}"
         
-        # 删除可能存在的旧的 80,443 端口规则
-        while ip6tables -D INPUT -p tcp -m multiport --dports 80,443 -j DROP 2>/dev/null; do :; done
-        ip6tables_tmp=$(mktemp)
-        ip6tables-save | grep -v "multiport dports 80,443" > "$ip6tables_tmp"
-        ip6tables-restore < "$ip6tables_tmp"
-        rm -f "$ip6tables_tmp"
+        # 完全删除所有 web 端口相关规则
+        ip6tables-save | grep -v "multiport dports 80,443" | ip6tables-restore
         
-        # 允许Cloudflare IPv6访问 web 端口
+        # 允许 Cloudflare IPv6 访问 web 端口
         while IFS= read -r ip; do
             [[ -n "$ip" ]] && ip6tables -I INPUT -s "$ip" -p tcp -m multiport --dports 80,443 -j ACCEPT
         done < /tmp/cf_ipv6.txt
