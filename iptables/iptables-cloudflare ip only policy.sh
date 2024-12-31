@@ -142,8 +142,13 @@ configure_firewall() {
 
     echo -e "${YELLOW}配置 IPv4 规则...${NC}"
     
-    # 完全删除所有 web 端口相关规则
-    iptables-save | grep -v "multiport dports 80,443" | iptables-restore
+    # 查找并删除所有 web 端口相关规则
+    while IFS= read -r line; do
+        rule_num=$(echo "$line" | grep -oE "^[0-9]+")
+        if [[ -n "$rule_num" ]]; then
+            iptables -D INPUT $rule_num
+        fi
+    done < <(iptables -L INPUT --line-numbers -n | grep "dports 80,443" | tac)
     
     # 允许 Cloudflare IPv4 访问 web 端口
     while IFS= read -r ip; do
@@ -157,8 +162,13 @@ configure_firewall() {
     if [ -f /proc/net/if_inet6 ]; then
         echo -e "${YELLOW}配置 IPv6 规则...${NC}"
         
-        # 完全删除所有 web 端口相关规则
-        ip6tables-save | grep -v "multiport dports 80,443" | ip6tables-restore
+        # 查找并删除所有 web 端口相关规则
+        while IFS= read -r line; do
+            rule_num=$(echo "$line" | grep -oE "^[0-9]+")
+            if [[ -n "$rule_num" ]]; then
+                ip6tables -D INPUT $rule_num
+            fi
+        done < <(ip6tables -L INPUT --line-numbers -n | grep "dports 80,443" | tac)
         
         # 允许 Cloudflare IPv6 访问 web 端口
         while IFS= read -r ip; do
