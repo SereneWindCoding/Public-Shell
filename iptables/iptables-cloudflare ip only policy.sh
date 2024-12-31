@@ -64,6 +64,10 @@ check_requirements() {
             "arch")
                 pacman -Sy --noconfirm $tool || echo -e "${RED}Failed to install $tool${NC}"
                 ;;
+            *)
+                echo -e "${RED}未知的系统类型，无法安装 $tool${NC}"
+                exit 1
+                ;;
         esac
     done
     
@@ -136,27 +140,40 @@ configure_firewall() {
     iptables-save > /etc/iptables/backup/rules.v4.$(date +%Y%m%d_%H%M%S)
     ip6tables-save > /etc/iptables/backup/rules.v6.$(date +%Y%m%d_%H%M%S)
     
-    # 配置IPv4规则
     echo -e "${YELLOW}配置 IPv4 规则...${NC}"
     
-    # 允许Cloudflare IP访问 web 端口
+    # 删除可能存在的旧的 80,443 端口规则
+    while iptables -D INPUT -p tcp -m multiport --dports 80,443 -j DROP 2>/dev/null; do :; done
+    iptables_tmp=$(mktemp)
+    iptables-save | grep -v "multiport dports 80,443" > "$iptables_tmp"
+    iptables-restore < "$iptables_tmp"
+    rm -f "$iptables_tmp"
+    
+    # 允许Cloudflare IPv4访问 web 端口
     while IFS= read -r ip; do
         [[ -n "$ip" ]] && iptables -I INPUT -s "$ip" -p tcp -m multiport --dports 80,443 -j ACCEPT
     done < /tmp/cf_ipv4.txt
     
-    # 阻止其他来源访问 web 端口
+    # 添加阻止规则
     iptables -A INPUT -p tcp -m multiport --dports 80,443 -j DROP
     
-    # 配置IPv6规则(如果启用了IPv6)
+    # 如果有IPv6支持，配置IPv6规则
     if [ -f /proc/net/if_inet6 ]; then
         echo -e "${YELLOW}配置 IPv6 规则...${NC}"
+        
+        # 删除可能存在的旧的 80,443 端口规则
+        while ip6tables -D INPUT -p tcp -m multiport --dports 80,443 -j DROP 2>/dev/null; do :; done
+        ip6tables_tmp=$(mktemp)
+        ip6tables-save | grep -v "multiport dports 80,443" > "$ip6tables_tmp"
+        ip6tables-restore < "$ip6tables_tmp"
+        rm -f "$ip6tables_tmp"
         
         # 允许Cloudflare IPv6访问 web 端口
         while IFS= read -r ip; do
             [[ -n "$ip" ]] && ip6tables -I INPUT -s "$ip" -p tcp -m multiport --dports 80,443 -j ACCEPT
         done < /tmp/cf_ipv6.txt
         
-        # 阻止其他来源访问 web 端口
+        # 添加阻止规则
         ip6tables -A INPUT -p tcp -m multiport --dports 80,443 -j DROP
     fi
 }
@@ -167,7 +184,6 @@ ensure_persistence() {
     
     case $SYSTEM in
         "debian"|"ubuntu")
-            # 使用 netfilter-persistent
             mkdir -p /etc/iptables
             iptables-save > /etc/iptables/rules.v4
             ip6tables-save > /etc/iptables/rules.v6
@@ -177,18 +193,14 @@ ensure_persistence() {
             ;;
             
         "rhel"|"fedora")
-            # 使用 iptables-services
             iptables-save > /etc/sysconfig/iptables
             ip6tables-save > /etc/sysconfig/ip6tables
             
-            systemctl enable iptables
-            systemctl enable ip6tables
-            systemctl restart iptables
-            systemctl restart ip6tables
+            systemctl enable iptables ip6tables
+            systemctl restart iptables ip6tables
             ;;
             
         *)
-            # 对于其他系统，优先使用 systemd 服务
             if [ -d /etc/systemd/system ]; then
                 mkdir -p /etc/iptables
                 iptables-save > /etc/iptables/rules.v4
@@ -260,19 +272,14 @@ verify_rules() {
             ;;
     esac
     
-    # 检查规则文件
-    if [ -f /etc/iptables/rules.v4 ]; then
-        echo -e "${GREEN}IPv4 规则文件已保存${NC}"
-        # 显示当前 web 端口规则
-        echo -e "${GREEN}当前 IPv4 Web 端口规则：${NC}"
-        iptables -L INPUT -n -v | grep -E "dpt:(80|443)"
-    fi
+    # 检查 IPv4 规则
+    echo -e "\n${GREEN}当前 IPv4 Web 端口规则：${NC}"
+    iptables -L INPUT -n -v | grep -E "tcp.*dports 80,443"
     
-    if [ -f /etc/iptables/rules.v6 ] && [ -f /proc/net/if_inet6 ]; then
-        echo -e "${GREEN}IPv6 规则文件已保存${NC}"
-        # 显示当前 web 端口规则
-        echo -e "${GREEN}当前 IPv6 Web 端口规则：${NC}"
-        ip6tables -L INPUT -n -v | grep -E "dpt:(80|443)"
+    # 检查 IPv6 规则（如果启用了IPv6）
+    if [ -f /proc/net/if_inet6 ]; then
+        echo -e "\n${GREEN}当前 IPv6 Web 端口规则：${NC}"
+        ip6tables -L INPUT -n -v | grep -E "tcp.*dports 80,443"
     fi
 }
 
@@ -293,7 +300,7 @@ main() {
     
     # 下载 Cloudflare IP 列表
     download_cf_ips "v4"
-    download_cf_ips "v6"
+    [ -f /proc/net/if_inet6 ] && download_cf_ips "v6"
     
     # 配置防火墙规则
     configure_firewall
@@ -307,7 +314,7 @@ main() {
     # 清理临时文件
     cleanup
     
-    echo -e "${GREEN}Cloudflare IP 防护配置完成！${NC}"
+    echo -e "\n${GREEN}Cloudflare IP 防护配置完成！${NC}"
     echo -e "${YELLOW}规则备份保存在 /etc/iptables/backup/ 目录下${NC}"
     echo -e "${GREEN}请检查以上输出确认规则配置正确${NC}"
 }
