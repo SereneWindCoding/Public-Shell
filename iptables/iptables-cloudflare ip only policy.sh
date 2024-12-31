@@ -299,7 +299,7 @@ main() {
     download_cf_ips "v4"
     [ -f /proc/net/if_inet6 ] && download_cf_ips "v6"
     configure_firewall
-    ensure_persistence
+    #ensure_persistence
     verify_rules
     cleanup
     
