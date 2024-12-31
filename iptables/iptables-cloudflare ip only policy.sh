@@ -51,24 +51,31 @@ check_requirements() {
         fi
     done
     
-    # 根据不同系统安装缺失工具和持久化包
+    # 根据不同系统逐个安装缺失工具
+    for tool in "${missing_tools[@]}"; do
+        case $SYSTEM in
+            "debian"|"ubuntu")
+                apt-get update >/dev/null 2>&1
+                apt-get install -y $tool || echo -e "${RED}Failed to install $tool${NC}"
+                ;;
+            "rhel"|"fedora")
+                yum -y install $tool || echo -e "${RED}Failed to install $tool${NC}"
+                ;;
+            "arch")
+                pacman -Sy --noconfirm $tool || echo -e "${RED}Failed to install $tool${NC}"
+                ;;
+        esac
+    done
+    
+    # 安装持久化包
     case $SYSTEM in
         "debian"|"ubuntu")
-            apt-get update >/dev/null 2>&1
-            if [ ${#missing_tools[@]} -ne 0 ]; then
-                apt-get install -y ${missing_tools[*]}
-            fi
-            # 安装持久化包
             if ! dpkg -l | grep -q "iptables-persistent"; then
                 echo -e "${YELLOW}正在安装 iptables-persistent...${NC}"
                 DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent
             fi
             ;;
         "rhel"|"fedora")
-            if [ ${#missing_tools[@]} -ne 0 ]; then
-                yum -y install ${missing_tools[*]}
-            fi
-            # 安装持久化包
             if ! rpm -q iptables-services >/dev/null 2>&1; then
                 echo -e "${YELLOW}正在安装 iptables-services...${NC}"
                 yum -y install iptables-services
@@ -77,9 +84,6 @@ check_requirements() {
             fi
             ;;
         "arch")
-            if [ ${#missing_tools[@]} -ne 0 ]; then
-                pacman -Sy --noconfirm ${missing_tools[*]}
-            fi
             if ! pacman -Qs iptables >/dev/null 2>&1; then
                 echo -e "${YELLOW}正在安装 iptables...${NC}"
                 pacman -Sy --noconfirm iptables
@@ -92,21 +96,35 @@ check_requirements() {
 download_cf_ips() {
     local type=$1
     local tmp_file=""
+    local url=""
+    local max_retries=3
+    local retry_count=0
     
     if [ "$type" = "v4" ]; then
         tmp_file="/tmp/cf_ipv4.txt"
+        url="https://www.cloudflare.com/ips-v4"
         echo -e "${YELLOW}正在下载 Cloudflare IPv4 列表...${NC}"
-        curl -s https://www.cloudflare.com/ips-v4 -o "$tmp_file"
     else
         tmp_file="/tmp/cf_ipv6.txt"
+        url="https://www.cloudflare.com/ips-v6"
         echo -e "${YELLOW}正在下载 Cloudflare IPv6 列表...${NC}"
-        curl -s https://www.cloudflare.com/ips-v6 -o "$tmp_file"
     fi
     
-    if [ ! -s "$tmp_file" ]; then
-        echo -e "${RED}下载的 IP 列表为空${NC}"
-        exit 1
-    fi
+    while [ $retry_count -lt $max_retries ]; do
+        if curl -s --retry 3 --retry-delay 5 --connect-timeout 10 --max-time 30 "$url" -o "$tmp_file"; then
+            if [ -s "$tmp_file" ]; then
+                echo -e "${GREEN}下载成功${NC}"
+                return 0
+            fi
+        fi
+        
+        retry_count=$((retry_count + 1))
+        echo -e "${YELLOW}下载失败，尝试重试 ($retry_count/$max_retries)...${NC}"
+        sleep 5
+    done
+    
+    echo -e "${RED}下载失败，请检查网络连接${NC}"
+    exit 1
 }
 
 # 配置防火墙规则
@@ -121,58 +139,26 @@ configure_firewall() {
     # 配置IPv4规则
     echo -e "${YELLOW}配置 IPv4 规则...${NC}"
     
-    # 清除现有规则
-    iptables -F
-    iptables -X
-    iptables -Z
-    
-    # 设置默认策略
-    iptables -P INPUT ACCEPT
-    iptables -P FORWARD ACCEPT
-    iptables -P OUTPUT ACCEPT
-    
-    # 允许已建立的连接和本地连接
-    iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-    iptables -A INPUT -i lo -j ACCEPT
-    
-    # 允许SSH（防止锁定）
-    iptables -A INPUT -p tcp --dport 22 -j ACCEPT
-    
-    # 允许Cloudflare IP
+    # 允许Cloudflare IP访问 web 端口
     while IFS= read -r ip; do
-        [[ -n "$ip" ]] && iptables -A INPUT -s "$ip" -p tcp -m multiport --dports 80,443 -j ACCEPT
+        [[ -n "$ip" ]] && iptables -I INPUT -s "$ip" -p tcp -m multiport --dports 80,443 -j ACCEPT
     done < /tmp/cf_ipv4.txt
     
-    # 阻止其他HTTP/HTTPS访问
+    # 阻止其他来源访问 web 端口
     iptables -A INPUT -p tcp -m multiport --dports 80,443 -j DROP
     
-    # 配置IPv6规则
-    echo -e "${YELLOW}配置 IPv6 规则...${NC}"
-    
-    # 清除现有规则
-    ip6tables -F
-    ip6tables -X
-    ip6tables -Z
-    
-    # 设置默认策略
-    ip6tables -P INPUT ACCEPT
-    ip6tables -P FORWARD ACCEPT
-    ip6tables -P OUTPUT ACCEPT
-    
-    # 允许已建立的连接和本地连接
-    ip6tables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-    ip6tables -A INPUT -i lo -j ACCEPT
-    
-    # 允许SSH（防止锁定）
-    ip6tables -A INPUT -p tcp --dport 22 -j ACCEPT
-    
-    # 允许Cloudflare IPv6
-    while IFS= read -r ip; do
-        [[ -n "$ip" ]] && ip6tables -A INPUT -s "$ip" -p tcp -m multiport --dports 80,443 -j ACCEPT
-    done < /tmp/cf_ipv6.txt
-    
-    # 阻止其他HTTP/HTTPS访问
-    ip6tables -A INPUT -p tcp -m multiport --dports 80,443 -j DROP
+    # 配置IPv6规则(如果启用了IPv6)
+    if [ -f /proc/net/if_inet6 ]; then
+        echo -e "${YELLOW}配置 IPv6 规则...${NC}"
+        
+        # 允许Cloudflare IPv6访问 web 端口
+        while IFS= read -r ip; do
+            [[ -n "$ip" ]] && ip6tables -I INPUT -s "$ip" -p tcp -m multiport --dports 80,443 -j ACCEPT
+        done < /tmp/cf_ipv6.txt
+        
+        # 阻止其他来源访问 web 端口
+        ip6tables -A INPUT -p tcp -m multiport --dports 80,443 -j DROP
+    fi
 }
 
 # 确保规则持久化
@@ -180,32 +166,20 @@ ensure_persistence() {
     echo -e "${YELLOW}正在确保规则持久化...${NC}"
     
     case $SYSTEM in
-        "debian")
-            # Debian 使用 netfilter-persistent
+        "debian"|"ubuntu")
+            # 使用 netfilter-persistent
             mkdir -p /etc/iptables
             iptables-save > /etc/iptables/rules.v4
             ip6tables-save > /etc/iptables/rules.v6
             
-            # 启用 netfilter-persistent 服务
             systemctl enable netfilter-persistent
             systemctl restart netfilter-persistent
             ;;
             
-        "ubuntu")
-            # Ubuntu 使用 iptables-persistent
-            mkdir -p /etc/iptables
-            iptables-save > /etc/iptables/rules.v4
-            ip6tables-save > /etc/iptables/rules.v6
-            
-            # 启用 iptables-persistent 服务
-            systemctl enable iptables-persistent
-            systemctl restart iptables-persistent
-            ;;
-            
         "rhel"|"fedora")
-            # RHEL/CentOS 使用 iptables-services
-            service iptables save
-            service ip6tables save
+            # 使用 iptables-services
+            iptables-save > /etc/sysconfig/iptables
+            ip6tables-save > /etc/sysconfig/ip6tables
             
             systemctl enable iptables
             systemctl enable ip6tables
@@ -214,25 +188,40 @@ ensure_persistence() {
             ;;
             
         *)
-            # 通用系统采用启动脚本方案
-            mkdir -p /etc/iptables
-            iptables-save > /etc/iptables/rules.v4
-            ip6tables-save > /etc/iptables/rules.v6
-            
-            # 创建通用启动脚本
-            mkdir -p /etc/network/if-pre-up.d/
-            cat > /etc/network/if-pre-up.d/iptables << 'EOF'
-#!/bin/sh
-/sbin/iptables-restore < /etc/iptables/rules.v4
-/sbin/ip6tables-restore < /etc/iptables/rules.v6
+            # 对于其他系统，优先使用 systemd 服务
+            if [ -d /etc/systemd/system ]; then
+                mkdir -p /etc/iptables
+                iptables-save > /etc/iptables/rules.v4
+                ip6tables-save > /etc/iptables/rules.v6
+                
+                cat > /etc/systemd/system/iptables-restore.service << 'EOF'
+[Unit]
+Description=Restore iptables firewall rules
+Before=network-pre.target
+Wants=network-pre.target
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+ExecStart=/sbin/iptables-restore /etc/iptables/rules.v4
+ExecStart=/sbin/ip6tables-restore /etc/iptables/rules.v6
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
 EOF
-            chmod +x /etc/network/if-pre-up.d/iptables
-            ;;
-    esac
-    
-    # 添加双重保险（对所有系统）
-    mkdir -p /etc/network/if-pre-up.d/
-    cat > /etc/network/if-pre-up.d/iptables << 'EOF'
+                systemctl daemon-reload
+                systemctl enable iptables-restore
+                systemctl restart iptables-restore
+                
+            else
+                # 如果没有 systemd，使用传统的网络脚本方式
+                mkdir -p /etc/iptables
+                iptables-save > /etc/iptables/rules.v4
+                ip6tables-save > /etc/iptables/rules.v6
+                
+                mkdir -p /etc/network/if-pre-up.d/
+                cat > /etc/network/if-pre-up.d/iptables << 'EOF'
 #!/bin/sh
 if [ -f /etc/iptables/rules.v4 ]; then
     /sbin/iptables-restore < /etc/iptables/rules.v4
@@ -241,27 +230,23 @@ if [ -f /etc/iptables/rules.v6 ]; then
     /sbin/ip6tables-restore < /etc/iptables/rules.v6
 fi
 EOF
-    chmod +x /etc/network/if-pre-up.d/iptables
+                chmod +x /etc/network/if-pre-up.d/iptables
+            fi
+            ;;
+    esac
 }
 
 # 验证规则
 verify_rules() {
     echo -e "${YELLOW}验证防火墙规则配置...${NC}"
     
+    # 检查服务状态
     case $SYSTEM in
-        "debian")
+        "debian"|"ubuntu")
             if systemctl is-active netfilter-persistent >/dev/null 2>&1; then
                 echo -e "${GREEN}netfilter-persistent 服务运行中${NC}"
             else
                 echo -e "${RED}netfilter-persistent 服务未运行${NC}"
-                return 1
-            fi
-            ;;
-        "ubuntu")
-            if systemctl is-active iptables-persistent >/dev/null 2>&1; then
-                echo -e "${GREEN}iptables-persistent 服务运行中${NC}"
-            else
-                echo -e "${RED}iptables-persistent 服务未运行${NC}"
                 return 1
             fi
             ;;
@@ -276,16 +261,18 @@ verify_rules() {
     esac
     
     # 检查规则文件
-    if [ -f /etc/iptables/rules.v4 ] && [ -f /etc/iptables/rules.v6 ]; then
-        echo -e "${GREEN}规则文件已保存${NC}"
-        # 显示当前规则
-        echo -e "${GREEN}当前IPv4规则：${NC}"
-        iptables -L INPUT -n -v | grep -E "80|443"
-        echo -e "${GREEN}当前IPv6规则：${NC}"
-        ip6tables -L INPUT -n -v | grep -E "80|443"
-    else
-        echo -e "${RED}规则文件未找到${NC}"
-        return 1
+    if [ -f /etc/iptables/rules.v4 ]; then
+        echo -e "${GREEN}IPv4 规则文件已保存${NC}"
+        # 显示当前 web 端口规则
+        echo -e "${GREEN}当前 IPv4 Web 端口规则：${NC}"
+        iptables -L INPUT -n -v | grep -E "dpt:(80|443)"
+    fi
+    
+    if [ -f /etc/iptables/rules.v6 ] && [ -f /proc/net/if_inet6 ]; then
+        echo -e "${GREEN}IPv6 规则文件已保存${NC}"
+        # 显示当前 web 端口规则
+        echo -e "${GREEN}当前 IPv6 Web 端口规则：${NC}"
+        ip6tables -L INPUT -n -v | grep -E "dpt:(80|443)"
     fi
 }
 
@@ -298,30 +285,34 @@ cleanup() {
 main() {
     echo -e "${GREEN}开始配置 Cloudflare IP 防护...${NC}"
     
+    # 检查系统环境
     check_system
+    
+    # 检查并安装必要工具
     check_requirements
     
-    # 下载IP列表
+    # 下载 Cloudflare IP 列表
     download_cf_ips "v4"
     download_cf_ips "v6"
     
-    # 配置防火墙
+    # 配置防火墙规则
     configure_firewall
     
-    # 确保持久化
+    # 确保规则持久化
     ensure_persistence
     
     # 验证配置
     verify_rules
     
-    # 清理
+    # 清理临时文件
     cleanup
     
     echo -e "${GREEN}Cloudflare IP 防护配置完成！${NC}"
     echo -e "${YELLOW}规则备份保存在 /etc/iptables/backup/ 目录下${NC}"
-    echo -e "${GREEN}请重启系统以验证规则是否正确持久化${NC}"
+    echo -e "${GREEN}请检查以上输出确认规则配置正确${NC}"
 }
 
+# 启动主程序
 main
 
 exit 0
