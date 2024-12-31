@@ -64,10 +64,6 @@ check_requirements() {
             "arch")
                 pacman -Sy --noconfirm $tool || echo -e "${RED}Failed to install $tool${NC}"
                 ;;
-            *)
-                echo -e "${RED}未知的系统类型，无法安装 $tool${NC}"
-                exit 1
-                ;;
         esac
     done
     
@@ -142,43 +138,51 @@ configure_firewall() {
 
     echo -e "${YELLOW}配置 IPv4 规则...${NC}"
     
-    # 先保存非 80,443 相关的规则到临时文件
-    iptables-save | grep -v "multiport dports 80,443" > /tmp/rules.v4.tmp
+    # 清除相关规则
+    rules_file=$(mktemp)
+    iptables-save > "$rules_file"
+    sed -i '/dports 80,443/d' "$rules_file"
+    sed -i '/COMMIT/d' "$rules_file"
     
-    # 添加 Cloudflare 规则到临时文件
+    # 添加新规则
     while IFS= read -r ip; do
         if [ -n "$ip" ]; then
-            echo "-A INPUT -s $ip -p tcp -m multiport --dports 80,443 -j ACCEPT" >> /tmp/rules.v4.tmp
+            echo "-A INPUT -s $ip -p tcp -m multiport --dports 80,443 -j ACCEPT" >> "$rules_file"
         fi
     done < /tmp/cf_ipv4.txt
     
-    # 添加阻止规则到临时文件
-    echo "-A INPUT -p tcp -m multiport --dports 80,443 -j DROP" >> /tmp/rules.v4.tmp
+    # 添加 DROP 规则
+    echo "-A INPUT -p tcp -m multiport --dports 80,443 -j DROP" >> "$rules_file"
+    echo "COMMIT" >> "$rules_file"
     
-    # 恢复规则
-    iptables-restore < /tmp/rules.v4.tmp
-    rm -f /tmp/rules.v4.tmp
+    # 应用规则
+    iptables-restore < "$rules_file"
+    rm -f "$rules_file"
     
-    # 如果有 IPv6 支持，配置 IPv6 规则
+    # 如果有IPv6支持，配置IPv6规则
     if [ -f /proc/net/if_inet6 ]; then
         echo -e "${YELLOW}配置 IPv6 规则...${NC}"
         
-        # 先保存非 80,443 相关的规则到临时文件
-        ip6tables-save | grep -v "multiport dports 80,443" > /tmp/rules.v6.tmp
+        # 清除相关规则
+        rules_file=$(mktemp)
+        ip6tables-save > "$rules_file"
+        sed -i '/dports 80,443/d' "$rules_file"
+        sed -i '/COMMIT/d' "$rules_file"
         
-        # 添加 Cloudflare 规则到临时文件
+        # 添加新规则
         while IFS= read -r ip; do
             if [ -n "$ip" ]; then
-                echo "-A INPUT -s $ip -p tcp -m multiport --dports 80,443 -j ACCEPT" >> /tmp/rules.v6.tmp
+                echo "-A INPUT -s $ip -p tcp -m multiport --dports 80,443 -j ACCEPT" >> "$rules_file"
             fi
         done < /tmp/cf_ipv6.txt
         
-        # 添加阻止规则到临时文件
-        echo "-A INPUT -p tcp -m multiport --dports 80,443 -j DROP" >> /tmp/rules.v6.tmp
+        # 添加 DROP 规则
+        echo "-A INPUT -p tcp -m multiport --dports 80,443 -j DROP" >> "$rules_file"
+        echo "COMMIT" >> "$rules_file"
         
-        # 恢复规则
-        ip6tables-restore < /tmp/rules.v6.tmp
-        rm -f /tmp/rules.v6.tmp
+        # 应用规则
+        ip6tables-restore < "$rules_file"
+        rm -f "$rules_file"
     fi
 }
 
@@ -190,25 +194,26 @@ ensure_persistence() {
         "debian"|"ubuntu")
             mkdir -p /etc/iptables
             iptables-save > /etc/iptables/rules.v4
-            ip6tables-save > /etc/iptables/rules.v6
+            [ -f /proc/net/if_inet6 ] && ip6tables-save > /etc/iptables/rules.v6
             
+            # 只重启服务，不重载规则
             systemctl enable netfilter-persistent
-            systemctl restart netfilter-persistent
             ;;
             
         "rhel"|"fedora")
-            iptables-save > /etc/sysconfig/iptables
-            ip6tables-save > /etc/sysconfig/ip6tables
+            service iptables save
+            [ -f /proc/net/if_inet6 ] && service ip6tables save
             
-            systemctl enable iptables ip6tables
-            systemctl restart iptables ip6tables
+            # 只启用服务，不重载规则
+            systemctl enable iptables
+            [ -f /proc/net/if_inet6 ] && systemctl enable ip6tables
             ;;
             
         *)
             if [ -d /etc/systemd/system ]; then
                 mkdir -p /etc/iptables
                 iptables-save > /etc/iptables/rules.v4
-                ip6tables-save > /etc/iptables/rules.v6
+                [ -f /proc/net/if_inet6 ] && ip6tables-save > /etc/iptables/rules.v6
                 
                 cat > /etc/systemd/system/iptables-restore.service << 'EOF'
 [Unit]
@@ -228,13 +233,10 @@ WantedBy=multi-user.target
 EOF
                 systemctl daemon-reload
                 systemctl enable iptables-restore
-                systemctl restart iptables-restore
-                
             else
-                # 如果没有 systemd，使用传统的网络脚本方式
                 mkdir -p /etc/iptables
                 iptables-save > /etc/iptables/rules.v4
-                ip6tables-save > /etc/iptables/rules.v6
+                [ -f /proc/net/if_inet6 ] && ip6tables-save > /etc/iptables/rules.v6
                 
                 mkdir -p /etc/network/if-pre-up.d/
                 cat > /etc/network/if-pre-up.d/iptables << 'EOF'
