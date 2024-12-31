@@ -50,6 +50,17 @@ check_requirements() {
             missing_tools+=($tool)
         fi
     done
+
+    # Ubuntu 系统切换到 iptables-legacy
+    if [ "$SYSTEM" = "ubuntu" ]; then
+        # 获取 Ubuntu 版本号
+        ubuntu_version=$(awk -F'[".]' '/VERSION_ID=/ {print $2}' /etc/os-release)
+        if [ -n "$ubuntu_version" ] && [ "$ubuntu_version" -ge 20 ]; then
+            echo -e "${YELLOW}检测到 Ubuntu 20.04 或更高版本，正在切换到 iptables-legacy...${NC}"
+            update-alternatives --set iptables /usr/sbin/iptables-legacy >/dev/null 2>&1 || true
+            update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy >/dev/null 2>&1 || true
+        fi
+    fi
     
     # 根据不同系统逐个安装缺失工具
     for tool in "${missing_tools[@]}"; do
@@ -298,6 +309,7 @@ main() {
     echo -e "\n${GREEN}Cloudflare IP 防护配置完成！${NC}"
     echo -e "${YELLOW}规则备份保存在 /etc/iptables/backup/ 目录下${NC}"
     echo -e "${GREEN}请检查以上输出确认规则配置正确${NC}"
+    echo -e "${GREEN}完成配置后建议重启系统以确保规则正确加载${NC}"
 }
 
 main
