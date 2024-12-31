@@ -80,7 +80,6 @@ check_requirements() {
                 echo -e "${YELLOW}正在安装 iptables-services...${NC}"
                 yum -y install iptables-services
                 systemctl enable iptables ip6tables
-                systemctl start iptables ip6tables
             fi
             ;;
         "arch")
@@ -140,8 +139,6 @@ configure_firewall() {
 
     # 删除已存在的相关规则
     while iptables -D INPUT -p tcp -m multiport --dports 80,443 -j DROP 2>/dev/null; do :; done
-    
-    # 删除所有 Cloudflare IP 的规则
     while IFS= read -r ip; do
         if [ -n "$ip" ]; then
             iptables -D INPUT -s "$ip" -p tcp -m multiport --dports 80,443 -j ACCEPT 2>/dev/null || true
@@ -158,14 +155,12 @@ configure_firewall() {
     # 添加 DROP 规则
     iptables -A INPUT -p tcp -m multiport --dports 80,443 -j DROP
 
-    # 如果有IPv6支持，配置IPv6规则
+    # IPv6 配置
     if [ -f /proc/net/if_inet6 ]; then
         echo -e "${YELLOW}配置 IPv6 规则...${NC}"
         
         # 删除已存在的相关规则
         while ip6tables -D INPUT -p tcp -m multiport --dports 80,443 -j DROP 2>/dev/null; do :; done
-        
-        # 删除所有 Cloudflare IP 的规则
         while IFS= read -r ip; do
             if [ -n "$ip" ]; then
                 ip6tables -D INPUT -s "$ip" -p tcp -m multiport --dports 80,443 -j ACCEPT 2>/dev/null || true
@@ -191,26 +186,27 @@ ensure_persistence() {
     case $SYSTEM in
         "debian"|"ubuntu")
             mkdir -p /etc/iptables
+            # 保存当前规则
             iptables-save > /etc/iptables/rules.v4
             [ -f /proc/net/if_inet6 ] && ip6tables-save > /etc/iptables/rules.v6
             
-            systemctl enable netfilter-persistent
+            # 只启用服务，不重启
+            systemctl enable netfilter-persistent --quiet
             ;;
             
         "rhel"|"fedora")
             service iptables save
             [ -f /proc/net/if_inet6 ] && service ip6tables save
-            
-            systemctl enable iptables
-            [ -f /proc/net/if_inet6 ] && systemctl enable ip6tables
+            systemctl enable iptables --quiet
+            [ -f /proc/net/if_inet6 ] && systemctl enable ip6tables --quiet
             ;;
             
         *)
+            mkdir -p /etc/iptables
+            iptables-save > /etc/iptables/rules.v4
+            [ -f /proc/net/if_inet6 ] && ip6tables-save > /etc/iptables/rules.v6
+            
             if [ -d /etc/systemd/system ]; then
-                mkdir -p /etc/iptables
-                iptables-save > /etc/iptables/rules.v4
-                [ -f /proc/net/if_inet6 ] && ip6tables-save > /etc/iptables/rules.v6
-                
                 cat > /etc/systemd/system/iptables-restore.service << 'EOF'
 [Unit]
 Description=Restore iptables firewall rules
@@ -228,12 +224,8 @@ RemainAfterExit=yes
 WantedBy=multi-user.target
 EOF
                 systemctl daemon-reload
-                systemctl enable iptables-restore
+                systemctl enable iptables-restore --quiet
             else
-                mkdir -p /etc/iptables
-                iptables-save > /etc/iptables/rules.v4
-                [ -f /proc/net/if_inet6 ] && ip6tables-save > /etc/iptables/rules.v6
-                
                 mkdir -p /etc/network/if-pre-up.d/
                 cat > /etc/network/if-pre-up.d/iptables << 'EOF'
 #!/bin/sh
@@ -299,7 +291,7 @@ main() {
     download_cf_ips "v4"
     [ -f /proc/net/if_inet6 ] && download_cf_ips "v6"
     configure_firewall
-    #ensure_persistence
+    ensure_persistence
     verify_rules
     cleanup
     
