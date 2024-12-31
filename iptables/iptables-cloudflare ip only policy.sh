@@ -137,52 +137,50 @@ configure_firewall() {
     ip6tables-save > /etc/iptables/backup/rules.v6.$(date +%Y%m%d_%H%M%S)
 
     echo -e "${YELLOW}配置 IPv4 规则...${NC}"
+
+    # 删除已存在的相关规则
+    while iptables -D INPUT -p tcp -m multiport --dports 80,443 -j DROP 2>/dev/null; do :; done
     
-    # 清除相关规则
-    rules_file=$(mktemp)
-    iptables-save > "$rules_file"
-    sed -i '/dports 80,443/d' "$rules_file"
-    sed -i '/COMMIT/d' "$rules_file"
+    # 删除所有 Cloudflare IP 的规则
+    while IFS= read -r ip; do
+        if [ -n "$ip" ]; then
+            iptables -D INPUT -s "$ip" -p tcp -m multiport --dports 80,443 -j ACCEPT 2>/dev/null || true
+        fi
+    done < /tmp/cf_ipv4.txt
     
     # 添加新规则
     while IFS= read -r ip; do
         if [ -n "$ip" ]; then
-            echo "-A INPUT -s $ip -p tcp -m multiport --dports 80,443 -j ACCEPT" >> "$rules_file"
+            iptables -I INPUT -s "$ip" -p tcp -m multiport --dports 80,443 -j ACCEPT
         fi
     done < /tmp/cf_ipv4.txt
     
     # 添加 DROP 规则
-    echo "-A INPUT -p tcp -m multiport --dports 80,443 -j DROP" >> "$rules_file"
-    echo "COMMIT" >> "$rules_file"
-    
-    # 应用规则
-    iptables-restore < "$rules_file"
-    rm -f "$rules_file"
-    
+    iptables -A INPUT -p tcp -m multiport --dports 80,443 -j DROP
+
     # 如果有IPv6支持，配置IPv6规则
     if [ -f /proc/net/if_inet6 ]; then
         echo -e "${YELLOW}配置 IPv6 规则...${NC}"
         
-        # 清除相关规则
-        rules_file=$(mktemp)
-        ip6tables-save > "$rules_file"
-        sed -i '/dports 80,443/d' "$rules_file"
-        sed -i '/COMMIT/d' "$rules_file"
+        # 删除已存在的相关规则
+        while ip6tables -D INPUT -p tcp -m multiport --dports 80,443 -j DROP 2>/dev/null; do :; done
+        
+        # 删除所有 Cloudflare IP 的规则
+        while IFS= read -r ip; do
+            if [ -n "$ip" ]; then
+                ip6tables -D INPUT -s "$ip" -p tcp -m multiport --dports 80,443 -j ACCEPT 2>/dev/null || true
+            fi
+        done < /tmp/cf_ipv6.txt
         
         # 添加新规则
         while IFS= read -r ip; do
             if [ -n "$ip" ]; then
-                echo "-A INPUT -s $ip -p tcp -m multiport --dports 80,443 -j ACCEPT" >> "$rules_file"
+                ip6tables -I INPUT -s "$ip" -p tcp -m multiport --dports 80,443 -j ACCEPT
             fi
         done < /tmp/cf_ipv6.txt
         
         # 添加 DROP 规则
-        echo "-A INPUT -p tcp -m multiport --dports 80,443 -j DROP" >> "$rules_file"
-        echo "COMMIT" >> "$rules_file"
-        
-        # 应用规则
-        ip6tables-restore < "$rules_file"
-        rm -f "$rules_file"
+        ip6tables -A INPUT -p tcp -m multiport --dports 80,443 -j DROP
     fi
 }
 
@@ -196,7 +194,6 @@ ensure_persistence() {
             iptables-save > /etc/iptables/rules.v4
             [ -f /proc/net/if_inet6 ] && ip6tables-save > /etc/iptables/rules.v6
             
-            # 只重启服务，不重载规则
             systemctl enable netfilter-persistent
             ;;
             
@@ -204,7 +201,6 @@ ensure_persistence() {
             service iptables save
             [ -f /proc/net/if_inet6 ] && service ip6tables save
             
-            # 只启用服务，不重载规则
             systemctl enable iptables
             [ -f /proc/net/if_inet6 ] && systemctl enable ip6tables
             ;;
@@ -298,26 +294,13 @@ cleanup() {
 main() {
     echo -e "${GREEN}开始配置 Cloudflare IP 防护...${NC}"
     
-    # 检查系统环境
     check_system
-    
-    # 检查并安装必要工具
     check_requirements
-    
-    # 下载 Cloudflare IP 列表
     download_cf_ips "v4"
     [ -f /proc/net/if_inet6 ] && download_cf_ips "v6"
-    
-    # 配置防火墙规则
     configure_firewall
-    
-    # 确保规则持久化
     ensure_persistence
-    
-    # 验证配置
     verify_rules
-    
-    # 清理临时文件
     cleanup
     
     echo -e "\n${GREEN}Cloudflare IP 防护配置完成！${NC}"
@@ -325,7 +308,6 @@ main() {
     echo -e "${GREEN}请检查以上输出确认规则配置正确${NC}"
 }
 
-# 启动主程序
 main
 
 exit 0
