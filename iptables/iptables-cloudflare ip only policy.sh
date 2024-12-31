@@ -142,41 +142,43 @@ configure_firewall() {
 
     echo -e "${YELLOW}配置 IPv4 规则...${NC}"
     
-    # 查找并删除所有 web 端口相关规则
-    while IFS= read -r line; do
-        rule_num=$(echo "$line" | grep -oE "^[0-9]+")
-        if [[ -n "$rule_num" ]]; then
-            iptables -D INPUT $rule_num
-        fi
-    done < <(iptables -L INPUT --line-numbers -n | grep "dports 80,443" | tac)
+    # 先保存非 80,443 相关的规则到临时文件
+    iptables-save | grep -v "multiport dports 80,443" > /tmp/rules.v4.tmp
     
-    # 允许 Cloudflare IPv4 访问 web 端口
+    # 添加 Cloudflare 规则到临时文件
     while IFS= read -r ip; do
-        [[ -n "$ip" ]] && iptables -I INPUT -s "$ip" -p tcp -m multiport --dports 80,443 -j ACCEPT
+        if [ -n "$ip" ]; then
+            echo "-A INPUT -s $ip -p tcp -m multiport --dports 80,443 -j ACCEPT" >> /tmp/rules.v4.tmp
+        fi
     done < /tmp/cf_ipv4.txt
     
-    # 添加阻止规则
-    iptables -A INPUT -p tcp -m multiport --dports 80,443 -j DROP
+    # 添加阻止规则到临时文件
+    echo "-A INPUT -p tcp -m multiport --dports 80,443 -j DROP" >> /tmp/rules.v4.tmp
+    
+    # 恢复规则
+    iptables-restore < /tmp/rules.v4.tmp
+    rm -f /tmp/rules.v4.tmp
     
     # 如果有 IPv6 支持，配置 IPv6 规则
     if [ -f /proc/net/if_inet6 ]; then
         echo -e "${YELLOW}配置 IPv6 规则...${NC}"
         
-        # 查找并删除所有 web 端口相关规则
-        while IFS= read -r line; do
-            rule_num=$(echo "$line" | grep -oE "^[0-9]+")
-            if [[ -n "$rule_num" ]]; then
-                ip6tables -D INPUT $rule_num
-            fi
-        done < <(ip6tables -L INPUT --line-numbers -n | grep "dports 80,443" | tac)
+        # 先保存非 80,443 相关的规则到临时文件
+        ip6tables-save | grep -v "multiport dports 80,443" > /tmp/rules.v6.tmp
         
-        # 允许 Cloudflare IPv6 访问 web 端口
+        # 添加 Cloudflare 规则到临时文件
         while IFS= read -r ip; do
-            [[ -n "$ip" ]] && ip6tables -I INPUT -s "$ip" -p tcp -m multiport --dports 80,443 -j ACCEPT
+            if [ -n "$ip" ]; then
+                echo "-A INPUT -s $ip -p tcp -m multiport --dports 80,443 -j ACCEPT" >> /tmp/rules.v6.tmp
+            fi
         done < /tmp/cf_ipv6.txt
         
-        # 添加阻止规则
-        ip6tables -A INPUT -p tcp -m multiport --dports 80,443 -j DROP
+        # 添加阻止规则到临时文件
+        echo "-A INPUT -p tcp -m multiport --dports 80,443 -j DROP" >> /tmp/rules.v6.tmp
+        
+        # 恢复规则
+        ip6tables-restore < /tmp/rules.v6.tmp
+        rm -f /tmp/rules.v6.tmp
     fi
 }
 
