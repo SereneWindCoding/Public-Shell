@@ -138,11 +138,15 @@ configure_firewall() {
 
     echo -e "${YELLOW}配置 IPv4 规则...${NC}"
 
-    # 删除所有 80,443 端口相关规则
-    line_numbers=$(iptables -L INPUT --line-numbers -n | grep -E "dports 80,443" | awk '{print $1}' | sort -r)
-    for number in $line_numbers; do
-        iptables -D INPUT $number
-    done
+    # 删除已存在的相关规则
+    while iptables -D INPUT -p tcp -m multiport --dports 80,443 -j DROP 2>/dev/null; do :; done
+    
+    # 删除所有 Cloudflare IP 的规则
+    while IFS= read -r ip; do
+        if [ -n "$ip" ]; then
+            iptables -D INPUT -s "$ip" -p tcp -m multiport --dports 80,443 -j ACCEPT 2>/dev/null || true
+        fi
+    done < /tmp/cf_ipv4.txt
     
     # 添加新规则
     while IFS= read -r ip; do
@@ -158,11 +162,15 @@ configure_firewall() {
     if [ -f /proc/net/if_inet6 ]; then
         echo -e "${YELLOW}配置 IPv6 规则...${NC}"
         
-        # 删除所有 80,443 端口相关规则
-        line_numbers=$(ip6tables -L INPUT --line-numbers -n | grep -E "dports 80,443" | awk '{print $1}' | sort -r)
-        for number in $line_numbers; do
-            ip6tables -D INPUT $number
-        done
+        # 删除已存在的相关规则
+        while ip6tables -D INPUT -p tcp -m multiport --dports 80,443 -j DROP 2>/dev/null; do :; done
+        
+        # 删除所有 Cloudflare IP 的规则
+        while IFS= read -r ip; do
+            if [ -n "$ip" ]; then
+                ip6tables -D INPUT -s "$ip" -p tcp -m multiport --dports 80,443 -j ACCEPT 2>/dev/null || true
+            fi
+        done < /tmp/cf_ipv6.txt
         
         # 添加新规则
         while IFS= read -r ip; do
