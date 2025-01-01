@@ -1,19 +1,15 @@
 #!/usr/bin/env bash
 
-# 启用严格模式
 set -euo pipefail
 
-# 定义日志文件
 LOG_FILE="/var/log/server-optimization.log"
 BACKUP_DIR="/root/system_backup"
 
-# 定义全局变量
 declare release=""
 declare -i total_memory_mb=0
 declare -i cpu_cores=0
 declare -i cpu_threads=0
 
-# 定义颜色输出
 CSI="\033["
 CEND="${CSI}0m"
 CRED="${CSI}1;31m"
@@ -21,13 +17,11 @@ CGREEN="${CSI}1;32m"
 CYELLOW="${CSI}1;33m"
 CCYAN="${CSI}1;36m"
 
-# 输出函数
 OUT_ALERT() { echo -e "${CYELLOW}$1${CEND}" | tee -a "${LOG_FILE}"; }
 OUT_ERROR() { echo -e "${CRED}$1${CEND}" | tee -a "${LOG_FILE}"; }
 OUT_INFO() { echo -e "${CCYAN}$1${CEND}" | tee -a "${LOG_FILE}"; }
 OUT_SUCCESS() { echo -e "${CGREEN}$1${CEND}" | tee -a "${LOG_FILE}"; }
 
-# 检查是否在中国
 check_location() { 
     OUT_INFO "[信息] 正在检查服务器位置..."
     
@@ -49,7 +43,6 @@ check_location() {
     fi
 }
 
-# 检查root权限
 check_root() { 
     if [ $EUID -ne 0 ]; then
         OUT_ERROR "[错误] 此脚本需要root权限运行"
@@ -57,9 +50,7 @@ check_root() {
     fi
 }
 
-# 检测系统类型
 check_system() { 
-    # 首先检查是否存在 /etc/os-release 文件
     if [ -f /etc/os-release ]; then
         source /etc/os-release
         if echo "${ID}" | grep -qi "debian"; then
@@ -74,7 +65,6 @@ check_system() {
         fi
     fi
     
-    # 如果无法从 os-release 确定，使用传统方法
     if [ -f /etc/redhat-release ]; then
         release="centos"
         return 0
@@ -85,7 +75,6 @@ check_system() {
         return 0
     fi
     
-    # 使用 issue 文件作为后备
     if grep -qi "debian" /etc/issue; then
         release="debian"
         return 0
@@ -109,7 +98,6 @@ check_system() {
     return 1
 }
 
-# 检测CPU配置
 detect_cpu() {
     OUT_INFO "[信息] 检测CPU配置..."
     
@@ -118,21 +106,17 @@ detect_cpu() {
         return 1
     fi
     
-    # 获取物理核心数（cpu cores）
     cpu_cores=$(grep "cpu cores" /proc/cpuinfo | uniq | awk '{print $4}')
     if [ -z "$cpu_cores" ]; then
         OUT_ERROR "[错误] 无法获取CPU核心数"
         return 1
     fi
     
-    # 获取线程数（siblings）
     cpu_threads=$(grep "siblings" /proc/cpuinfo | uniq | awk '{print $3}')
     if [ -z "$cpu_threads" ]; then
-        # 如果无法获取线程数，则回退到处理器数量
         cpu_threads=$(grep -c processor /proc/cpuinfo)
     fi
     
-    # 获取CPU型号
     local cpu_model
     cpu_model=$(grep "model name" /proc/cpuinfo | head -n1 | cut -d':' -f2 | tr -s ' ')
     
@@ -141,11 +125,9 @@ detect_cpu() {
     OUT_INFO "[信息] CPU逻辑核心数: ${cpu_threads}"
 }
 
-# 检测内存配置
 detect_memory() {
     OUT_INFO "[信息] 检测内存配置..."
     
-    # 获取总内存(MB)
     if [ -f /proc/meminfo ]; then
         total_memory_mb=$(grep MemTotal /proc/meminfo | awk '{print int($2/1024)}')
     else
@@ -156,7 +138,6 @@ detect_memory() {
     OUT_INFO "[信息] 总内存: ${total_memory_mb}MB"
 }
 
-# 安装必要工具
 install_requirements() { 
     OUT_INFO "[信息] 安装必要工具..."
     
@@ -185,15 +166,13 @@ install_requirements() {
     OUT_SUCCESS "[成功] 工具安装完成"
     return 0
 }
-# 配置DNS
+
 configure_dns() { 
     OUT_INFO "配置系统DNS..."
     
-    # 获取位置信息
     local is_in_china
     is_in_china=$(check_location)
 
-    # 确保备份目录存在
     if [ ! -d "${BACKUP_DIR}" ]; then
         if ! mkdir -p "${BACKUP_DIR}"; then
             OUT_ERROR "无法创建备份目录：${BACKUP_DIR}"
@@ -201,7 +180,6 @@ configure_dns() {
         fi
     fi
 
-    # 检查并移除符号链接或不可修改属性
     if [ -L /etc/resolv.conf ]; then
         if ! rm -f /etc/resolv.conf; then
             OUT_ERROR "无法删除 resolv.conf 符号链接"
@@ -217,9 +195,7 @@ configure_dns() {
         fi
     fi
 
-    # 写入新的 DNS 配置
     if [ "${is_in_china}" = "true" ]; then
-        # 国内DNS配置
         if ! cat > /etc/resolv.conf << 'EOF'
 options timeout:2 attempts:3 rotate
 nameserver 223.5.5.5
@@ -233,7 +209,6 @@ EOF
         fi
         OUT_INFO "已配置国内DNS"
     else
-        # 国外DNS配置
         if ! cat > /etc/resolv.conf << 'EOF'
 options timeout:2 attempts:3 rotate
 nameserver 1.1.1.1
@@ -248,7 +223,6 @@ EOF
         OUT_INFO "已配置国际DNS"
     fi
 
-    # 设置文件为不可修改
     if ! chattr +i /etc/resolv.conf; then
         OUT_ERROR "无法设置 /etc/resolv.conf 为只读"
         return 1
@@ -258,19 +232,15 @@ EOF
     return 0
 }
 
-# 配置NTP
 configure_ntp() { 
     OUT_INFO "配置NTP时间同步..."
     
-    # 获取位置信息
     local is_in_china
     is_in_china=$(check_location)
 
-    # 使用真实服务名称 chrony.service
     NTP_SERVICE="chrony.service"
 
     if [ "${is_in_china}" = "true" ]; then
-        # 国内NTP配置
         if ! cat > /etc/chrony.conf << 'EOF'
 server ntp.aliyun.com iburst
 server cn.ntp.org.cn iburst
@@ -286,7 +256,6 @@ EOF
         fi
         OUT_INFO "已配置国内NTP服务器"
     else
-        # 国外NTP配置
         if ! cat > /etc/chrony.conf << 'EOF'
 pool pool.ntp.org iburst
 pool time.google.com iburst
@@ -303,7 +272,6 @@ EOF
         OUT_INFO "已配置国际NTP服务器"
     fi
 
-    # 启用并重启服务
     if ! systemctl enable "${NTP_SERVICE}"; then
         OUT_ERROR "无法启用 NTP 服务：${NTP_SERVICE}"
         return 1
@@ -317,12 +285,11 @@ EOF
     OUT_SUCCESS "NTP配置完成"
     return 0
 }
-# 根据硬件配置生成优化参数
+
 generate_optimization_params() {
     local mem_gb=$((total_memory_mb/1024))
     local params=""
     
-    # 如果无法检测到CPU或内存，使用保守配置
     if [ $total_memory_mb -eq 0 ] || [ $cpu_cores -eq 0 ]; then
         OUT_ALERT "[警告] 无法检测硬件配置，使用保守参数配置"
         params="net.ipv4.tcp_mem = 98304 131072 196608
@@ -338,9 +305,7 @@ net.core.somaxconn = 1024"
         return 0
     fi
     
-    # TCP内存相关参数（基于总内存）
     if [ $mem_gb -le 4 ]; then
-        # 4GB及以下内存
         params="net.ipv4.tcp_mem = 131072 196608 262144
 net.ipv4.tcp_rmem = 4096 131072 33554432
 net.ipv4.tcp_wmem = 4096 131072 33554432
@@ -349,7 +314,6 @@ net.core.wmem_max = 33554432
 net.core.rmem_default = 524288
 net.core.wmem_default = 524288"
     elif [ $mem_gb -le 16 ]; then
-        # 8-16GB内存
         params="net.ipv4.tcp_mem = 1048576 1572864 2097152
 net.ipv4.tcp_rmem = 4096 262144 67108864
 net.ipv4.tcp_wmem = 4096 262144 67108864
@@ -358,7 +322,6 @@ net.core.wmem_max = 67108864
 net.core.rmem_default = 1048576
 net.core.wmem_default = 1048576"
     else
-        # 32GB以上内存
         params="net.ipv4.tcp_mem = 2097152 3145728 4194304
 net.ipv4.tcp_rmem = 4096 524288 134217728
 net.ipv4.tcp_wmem = 4096 524288 134217728
@@ -368,19 +331,15 @@ net.core.rmem_default = 2097152
 net.core.wmem_default = 2097152"
     fi
     
-    # CPU相关参数
     if [ $cpu_cores -le 2 ]; then
-        # 低性能CPU
         params="${params}
 net.core.netdev_max_backlog = 10000
 net.core.somaxconn = 2048"
     elif [ $cpu_cores -le 4 ]; then
-        # 中等性能CPU
         params="${params}
 net.core.netdev_max_backlog = 30000
 net.core.somaxconn = 8192"
     else
-        # 高性能CPU
         params="${params}
 net.core.netdev_max_backlog = 100000
 net.core.somaxconn = 65535"
@@ -390,30 +349,24 @@ net.core.somaxconn = 65535"
     return 0
 }
 
-# 系统参数优化
 optimize_system() { 
     OUT_INFO "[信息] 优化系统参数..."
     
-    # 检测硬件配置
     if ! detect_cpu || ! detect_memory; then
         OUT_ERROR "[错误] 硬件检测失败"
         return 1
     fi
     
-    # 备份原始配置
     if [ -f /etc/sysctl.conf ] && \
        ! cp -f /etc/sysctl.conf "${BACKUP_DIR}/sysctl.conf.bak"; then
         OUT_ERROR "[错误] 无法备份sysctl.conf"
         return 1
     fi
     
-    # 获取优化参数
     local optimization_params
     optimization_params=$(generate_optimization_params)
     
-    # 配置sysctl参数
     if ! cat > /etc/sysctl.conf << EOF
-# 基础网络参数
 net.ipv4.ip_forward = 1
 net.ipv4.tcp_syncookies = 1
 net.ipv4.tcp_tw_reuse = 1
@@ -427,10 +380,8 @@ net.ipv4.tcp_max_syn_backlog = 30000
 net.ipv4.tcp_mtu_probing = 1
 net.ipv4.tcp_fastopen = 3
 
-# 动态生成的优化参数
 ${optimization_params}
 
-# TCP拥塞控制
 net.ipv4.tcp_congestion_control = bbr
 net.core.default_qdisc = fq
 net.ipv4.tcp_slow_start_after_idle = 0
@@ -440,20 +391,17 @@ net.ipv4.tcp_timestamps = 1
 net.ipv4.tcp_sack = 1
 net.ipv4.tcp_dsack = 1
 
-# 路由设置
 net.ipv4.conf.all.accept_source_route = 0
 net.ipv4.conf.default.accept_source_route = 0
 net.ipv4.conf.all.accept_redirects = 0
 net.ipv4.conf.default.accept_redirects = 0
 
-# 文件描述符限制
 fs.file-max = 2097152
 fs.nr_open = 2097152
 fs.inotify.max_user_instances = 8192
 fs.inotify.max_user_watches = 524288
 fs.pipe-max-size = 1048576
 
-# 内存参数
 vm.swappiness = 10
 vm.min_free_kbytes = 65536
 vm.overcommit_memory = 1
@@ -464,7 +412,6 @@ EOF
         return 1
     fi
 
-    # 备份并配置系统限制
     if [ -f /etc/security/limits.conf ] && \
        ! cp -f /etc/security/limits.conf "${BACKUP_DIR}/limits.conf.bak"; then
         OUT_ERROR "[错误] 无法备份limits.conf"
@@ -488,7 +435,6 @@ EOF
         return 1
     fi
     
-    # 确保PAM加载limits配置
     if [ -f /etc/pam.d/common-session ]; then
         if ! grep -q '^session.*pam_limits.so$' /etc/pam.d/common-session; then
             if ! echo "session required pam_limits.so" >> /etc/pam.d/common-session; then
@@ -498,7 +444,6 @@ EOF
         fi
     fi
     
-    # 应用sysctl参数
     if ! sysctl -p; then
         OUT_ERROR "[错误] 应用sysctl参数失败"
         return 1
@@ -508,17 +453,14 @@ EOF
     return 0
 }
 
-# 主函数
 main() { 
     OUT_INFO "[信息] 开始系统优化..."
     
-    # 创建备份目录
     if ! mkdir -p "${BACKUP_DIR}"; then
         OUT_ERROR "[错误] 无法创建备份目录"
         exit 1
     fi
     
-    # 基础检查
     if ! check_root; then
         OUT_ERROR "[错误] Root 权限检查失败"
         exit 1
@@ -534,7 +476,6 @@ main() {
         exit 1
     fi
     
-    # 系统配置
     if ! configure_dns; then
         OUT_ERROR "[错误] DNS配置失败"
         exit 1
@@ -545,7 +486,6 @@ main() {
         exit 1
     fi
     
-    # 性能优化
     if ! optimize_system; then
         OUT_ERROR "[错误] 系统参数优化失败"
         exit 1
@@ -555,5 +495,4 @@ main() {
     OUT_INFO "[信息] 建议重启系统使所有优化生效"
 }
 
-# 运行主函数
 main
